@@ -295,6 +295,7 @@
       }
       if (nb.length < 4) continue;
       const med = median(nb);
+      beats[k].med = med;
       if (beats[k].rr < (1 - cfg.ectopicPct) * med) beats[k].flag = 'corto';
       else if (beats[k].rr > (1 + cfg.ectopicPct) * med) beats[k].flag = 'largo';
     }
@@ -309,6 +310,16 @@
         if (beats[k].ok && beats[k - 1].ok) dpairs.push({ t: beats[k].t, d: beats[k].rr - beats[k - 1].rr });
       }
       const diffs = dpairs.map(x => x.d);
+      // Intervalos "normales" (NN): sin los latidos marcados corto/largo ni el intervalo siguiente (pausa)
+      const excl = beats.map((b, k) => !b.ok || !!b.flag || (k > 0 && !!beats[k - 1].flag));
+      const nn = [], nnd = [];
+      beats.forEach((b, k) => {
+        if (excl[k]) return;
+        nn.push(b.rr);
+        if (k > 0 && !excl[k - 1]) nnd.push(b.rr - beats[k - 1].rr);
+      });
+      const nFlag = beats.filter(b => b.flag).length;
+      const nnOk = nn.length >= 20 && nFlag / rr.length <= 0.30; // con demasiados marcados (p. ej. FA) no tiene sentido
       const m = mean(rr);
       // FC con promedio móvil de 10 latidos: máximo y mínimo con su posición
       let maxHR = null, minHR = null;
@@ -337,6 +348,10 @@
         meanRR: m,
         sdnn: sd(rr),
         rmssd: diffs.length ? Math.sqrt(mean(diffs.map(d => d * d))) : null,
+        nnValid: nnOk, nnBeats: nn.length, nnExcluded: rr.length - nn.length,
+        sdnnNN: nnOk ? sd(nn) : null,
+        rmssdNN: nnOk && nnd.length ? Math.sqrt(mean(nnd.map(d => d * d))) : null,
+        pnn50NN: nnOk && nnd.length ? 100 * nnd.filter(d => Math.abs(d) > 50).length / nnd.length : null,
         pnn50: diffs.length ? 100 * diffs.filter(d => Math.abs(d) > 50).length / diffs.length : null,
         flagged: beats.filter(b => b.flag).length,
         flaggedPct: 100 * beats.filter(b => b.flag).length / rr.length

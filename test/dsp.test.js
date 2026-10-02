@@ -126,6 +126,22 @@ test('ondas P: con ruido alto no se declara "incoherentes" (indeterminado por ru
   assert.strictEqual(p.reason, 'ruido alto');
 });
 
+test('VFC sin latidos marcados: un latido adelantado con pausa no infla el RMSSD', () => {
+  // ritmo ~810 ms estable; en el latido 20 llega uno a 592 ms y luego 945 ms (caso real observado)
+  const rrSeq = k => (k === 20 ? 0.592 : k === 21 ? 0.945 : 0.81 + 0.008 * Math.sin(k * 1.7));
+  const m = DSP.analyze(gen(60, { rrSeq, seed: 4, noise: 10 }), DSP.FS, []).metrics;
+  assert.strictEqual(m.flagged, 1, 'marcados ' + m.flagged);
+  assert.ok(m.rmssd > 35, 'rmssd con todos ' + m.rmssd);
+  assert.ok(m.nnValid && m.rmssdNN < 15, 'rmssdNN ' + m.rmssdNN);
+  assert.ok(m.nnExcluded >= 2 && m.nnExcluded <= 3, 'excluidos ' + m.nnExcluded);
+  assert.ok(m.sdnnNN < m.sdnn);
+});
+
+test('VFC sin latidos marcados: con ritmo irregular (muchos marcados) no se calcula', () => {
+  const m = DSP.analyze(gen(60, { irregular: true, seed: 5 }), DSP.FS, []).metrics;
+  assert.strictEqual(m.nnValid, false); assert.strictEqual(m.rmssdNN, null);
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;

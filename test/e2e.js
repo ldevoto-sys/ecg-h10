@@ -97,6 +97,8 @@ const MOCK = `
     hr: A.an.metrics.meanHR, beats: A.an.metrics.beats, valid: A.an.validPct, rr: A.data.rrDevice.length,
     first: Array.from(A.data.samples.slice(0, 3))
   }));
+  const widths = await page.evaluate(() => ['trace', 'tacho', 'poinc', 'avgBeat'].map(id => [id, document.getElementById(id).width]));
+  assert.ok(widths.every(([, w]) => w > 100), 'canvas con ancho 0: ' + JSON.stringify(widths));
   console.log(info);
   assert.ok(info.gaps.some(ms => ms > 450 && ms < 700), 'hueco de trama detectado por timestamp: ' + info.gaps);
   assert.ok(info.gaps.some(ms => ms >= 1000), 'hueco de reconexión registrado');

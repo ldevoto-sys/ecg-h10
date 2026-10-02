@@ -26,6 +26,7 @@
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin:12px 0; }
   .card { border:1px solid var(--line); border-radius:8px; padding:10px; }
   .card .v { font-size:26px; font-weight:700; line-height:1.1; }
+  .card .v.txt { font-size:16px; overflow-wrap:anywhere; padding:5px 0 3px; }
   .card .l { font-size:13px; color:var(--gray); }
   canvas { width:100%; display:block; border:1px solid var(--line); border-radius:8px; background:var(--white); touch-action:pan-y; }
   h2 { font-size:17px; margin:20px 0 6px; }
@@ -39,7 +40,7 @@
   footer { padding:16px; text-align:center; font-size:12px; color:var(--gray); }
   #status { font-weight:600; }
   .note { border-left:4px solid var(--cyan); padding:6px 12px; margin:10px 0; font-size:14px; color:var(--navy); background:var(--grid); }
-  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; }
+  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; } h2 { break-after:avoid; }
     canvas { width:100% !important; height:auto !important; } .card,canvas,table,.note { break-inside:avoid; } }
 </style>
 </head>
@@ -500,25 +501,27 @@ async function openAnalysis(id) {
   A.an = an;
   const lo = DSP.percentile(an.ecg, 0.001), hi = DSP.percentile(an.ecg, 0.999), pad = (hi - lo) * 0.15 || 100;
   A.yr = [lo - pad, hi + pad];
-  renderSummary(); renderSnaps(); renderEvents(); renderTables(); setupViewer(); drawTacho(); drawPoinc();
+  renderSummary(); renderSnaps(); renderEvents(); renderTables(); setupViewer();
   $('aWait').classList.add('hide'); $('aBody').classList.remove('hide');
-  drawTrace(); drawSnaps(); drawAvgBeat();
+  drawTrace(); drawSnaps(); drawAvgBeat(); drawTacho(); drawPoinc(); // tras mostrar la sección: con ancho 0 no se dibuja
 }
 
 function renderSummary() {
   const m = A.an.metrics, an = A.an;
-  const card = (v, l, i) => `<div class="card"${i === undefined ? '' : ` data-i="${i}" style="cursor:pointer"`}><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  const card = (v, l, i, cls) => `<div class="card"${i === undefined ? '' : ` data-i="${i}" style="cursor:pointer"`}><div class="v${cls ? ' ' + cls : ''}">${v}</div><div class="l">${l}</div></div>`;
   const pos = p => p ? fmtT(p.t) : '';
   $('aCards').innerHTML = m ? [
-    card(num(m.rmssd), 'VFC · RMSSD (ms)'),
-    an.pwave ? card(an.pwave.level[0].toUpperCase() + an.pwave.level.slice(1), 'Ondas P (provisional)' + (an.pwave.corr !== null ? ' · coherencia ' + num(an.pwave.corr, 2) : '') + (an.pwave.reason ? ' · ' + an.pwave.reason : '')) : '',
-    an.irregularity ? card(an.irregularity.level[0].toUpperCase() + an.irregularity.level.slice(1), 'Irregularidad de intervalos (provisional) · CV ' + num(an.irregularity.cv, 2)) : '',
+    m.flagged > 0 && m.nnValid
+      ? card(num(m.rmssdNN), `VFC · RMSSD sin latidos marcados (ms) · ${m.nnExcluded} intervalos excluidos`) + card(num(m.rmssd), 'RMSSD con todos los latidos (ms)')
+      : card(num(m.rmssd), 'VFC · RMSSD (ms)' + (m.flagged > 0 ? ' · demasiados latidos marcados para excluirlos' : '')),
+    an.pwave ? card(an.pwave.level[0].toUpperCase() + an.pwave.level.slice(1), 'Ondas P (provisional)' + (an.pwave.corr !== null ? ' · coherencia ' + num(an.pwave.corr, 2) : '') + (an.pwave.reason ? ' · ' + an.pwave.reason : ''), undefined, 'txt') : '',
+    an.irregularity ? card(an.irregularity.level[0].toUpperCase() + an.irregularity.level.slice(1), 'Irregularidad de intervalos (provisional) · CV ' + num(an.irregularity.cv, 2), undefined, 'txt') : '',
     card(num(m.meanHR), 'FC media (lpm)'),
     card(num(m.maxHR), 'FC máx (10 latidos) · ' + pos(m.maxHRpos) + ' · toca para ver', m.maxHRpos && m.maxHRpos.i),
     card(num(m.minHR), 'FC mín (10 latidos) · ' + pos(m.minHRpos) + ' · toca para ver', m.minHRpos && m.minHRpos.i),
     m.hr1minMax ? card(num(m.hr1minMax.hr) + ' / ' + num(m.hr1minMin.hr), 'FC media 1 min: más alta / más baja') : '',
     card(num(m.pctTachy, 1) + '% / ' + num(m.pctBrady, 1) + '%', 'Latidos >150 / <50 lpm'),
-    card(num(m.sdnn), 'SDNN (ms)'), card(num(m.pnn50, 1) + '%', 'pNN50'),
+    m.flagged > 0 && m.nnValid ? card(num(m.sdnnNN), 'SDNN sin latidos marcados (ms)') + card(num(m.pnn50NN, 1) + '%', 'pNN50 sin latidos marcados') : card(num(m.sdnn), 'SDNN (ms)') + card(num(m.pnn50, 1) + '%', 'pNN50'),
     card(m.flagged + ' (' + num(m.flaggedPct, 1) + '%)', 'Latidos corto/largo'), card(m.beats, 'Latidos válidos')
   ].join('') : card('--', 'Sin latidos válidos suficientes');
   $('aCards').querySelectorAll('[data-i]').forEach(c => c.onclick = () => jumpTo(+c.dataset.i));
@@ -536,7 +539,10 @@ function renderSummary() {
   else head = `Criterios no concluyentes (irregularidad ${ir ? ir.level : '--'}, patrón ${ir && ir.pattern || '--'}, ondas P ${pw ? pw.level : '--'}). Revisa el trazado y el latido promedio.`;
   const pDet = !pw ? '' : pw.level === 'insuficiente' ? ` Ondas P: menos de ${DSP.CFG.pMinBeats} latidos con intervalo previo ≥ ${DSP.CFG.pRrMin} ms (típico con ritmo rápido); no se pueden evaluar.` :
     ` Ondas P ${pw.level} (coherencia ${num(pw.corr, 2)}, ${pw.n} latidos${pw.reason ? ', ' + pw.reason + ': ' + num(pw.noiseUv, 0) + ' µV' : ''}).`;
-  $('aIrrNote').textContent = head + ' ' + (!ir ? 'Irregularidad: muy pocos latidos válidos.' :
+  const fl = an.beats.filter(b => b.flag), nextRR = b => { const k = an.beats.indexOf(b), n = an.beats[k + 1]; return n && n.rr ? Math.round(n.rr) : null; };
+  const flagTxt = !fl.length ? '' : fl.length > 5 ? ` ${fl.length} latidos marcados corto/largo.` :
+    ' Latidos marcados: ' + fl.map(b => `1 ${b.flag} a ${fmtT(b.t)} (RR ${Math.round(b.rr)} ms${b.flag === 'corto' && nextRR(b) ? `; el siguiente ${nextRR(b)} ms` : ''})`).join('; ') + '. Revisa el trazado en esos puntos.';
+  $('aIrrNote').textContent = head + flagTxt + ' ' + (!ir ? 'Irregularidad: muy pocos latidos válidos.' :
     (ir.level === 'baja' ? `Intervalos regulares (CV ${num(ir.cv, 3)}, ${ir.source}).` :
      `Irregularidad ${ir.level} (CV ${num(ir.cv, 3)}, ${ir.source})` + (ir.pattern ? `. Patrón ${ir.pattern}: ${PAT[ir.pattern]}.` : '.'))) + pDet +
     ' Indicadores provisionales: umbrales elegidos con 3 grabaciones de 30 s de otro dispositivo, sin validar con la H10. No diagnostican, no reemplazan a un médico, y que no marquen nada no descarta una arritmia.';
@@ -600,7 +606,7 @@ function renderTables() {
     tr.onclick = () => jumpTo(w.i0); wt.appendChild(tr);
   });
   const fl = an.beats.filter(b => b.flag);
-  $('flagInfo').textContent = fl.length ? `${fl.length} latidos con RR >20 % distinto de la mediana de sus vecinos. Primeros 100 (toca para ver el trazado).` : 'Ninguno.';
+  $('flagInfo').textContent = fl.length ? `${fl.length} latido${fl.length === 1 ? '' : 's'} con RR >20 % distinto de la mediana de sus vecinos. Primeros 100 (toca para ver el trazado).` : 'Ninguno.';
   const ft = $('flagTable').querySelector('tbody'); ft.innerHTML = '';
   fl.slice(0, 100).forEach(b => {
     const tr = document.createElement('tr'); tr.className = 'click';
@@ -684,10 +690,10 @@ function drawPoinc() {
   const pts = []; for (let k = 1; k < bs.length; k++) if (bs[k].ok && bs[k - 1].ok) pts.push([bs[k - 1].rr, bs[k].rr]);
   if (pts.length < 2) return;
   const lo = 300, hi = Math.max(1200, ...pts.map(p => Math.max(p[0], p[1]))), s = Math.min(w, h) - 30;
-  const X = v => 30 + (v - lo) / (hi - lo) * s, Y = v => 5 + (hi - v) / (hi - lo) * s;
+  const ox = Math.max(30, (w - s) / 2), X = v => ox + (v - lo) / (hi - lo) * s, Y = v => 5 + (hi - v) / (hi - lo) * s;
   g.strokeStyle = C.grid2; g.beginPath(); g.moveTo(X(lo), Y(lo)); g.lineTo(X(hi), Y(hi)); g.stroke();
-  g.strokeRect(30, 5, s, s);
-  g.fillStyle = C.gray; g.font = '11px system-ui'; g.fillText('RR(n) ms →', 30, h - 4); g.fillText(hi | 0, 2, 14);
+  g.strokeRect(ox, 5, s, s);
+  g.fillStyle = C.gray; g.font = '11px system-ui'; g.fillText('RR(n) ms →', ox, h - 4); g.fillText(hi | 0, ox - 28, 14);
   g.fillStyle = 'rgba(17,37,72,.55)';
   for (const p of pts) { g.beginPath(); g.arc(X(p[0]), Y(p[1]), 2.2, 0, 7); g.fill(); }
 }
