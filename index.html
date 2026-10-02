@@ -714,6 +714,14 @@ $('xJson').onclick = () => download(base() + '_resumen.json', JSON.stringify({
   ventanas_mas_irregulares: [...A.an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5),
   umbrales: DSP.CFG, nota: 'Heurísticos no calibrados. Sin fines médicos.'
 }, null, 2), 'application/json');
+// Nombre por defecto del PDF: aaaammdd_hhmmss_polarh10 (hora local de inicio de la grabación)
+const baseTitle = document.title, p2 = n => String(n).padStart(2, '0');
+function pdfName(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}_polarh10`;
+}
+window.addEventListener('beforeprint', () => { if (A.an && A.meta) document.title = pdfName(A.meta.startedAt); });
+window.addEventListener('afterprint', () => { document.title = baseTitle; });
 $('xPrint').onclick = () => window.print();
 $('xDel').onclick = async () => {
   if (!confirm('¿Eliminar esta sesión de este teléfono? No se puede deshacer. Exporta antes si la necesitas.')) return;

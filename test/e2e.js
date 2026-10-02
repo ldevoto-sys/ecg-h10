@@ -108,6 +108,11 @@ const MOCK = `
   await page.locator('#trace').screenshot({ path: path.join(__dirname, 'shot-trace.png') });
   console.log('ok  - análisis: FC', info.hr.toFixed(1), 'lpm, huecos', info.gaps.join(', '), 'ms');
 
+  const pdfTitle = await page.evaluate(() => { dispatchEvent(new Event('beforeprint')); const t = document.title; dispatchEvent(new Event('afterprint')); return [t, document.title]; });
+  const expected = await page.evaluate(() => { const d = new Date(A.meta.startedAt), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_polarh10`; });
+  assert.ok(/^\d{8}_\d{6}_polarh10$/.test(pdfTitle[0]) && pdfTitle[0] === expected, 'nombre PDF: ' + pdfTitle[0]);
+  assert.strictEqual(pdfTitle[1], 'ECG H10', 'el título se restaura');
+  console.log('ok  - nombre por defecto del PDF:', pdfTitle[0]);
   await page.emulateMedia({ media: 'print' });
   await page.pdf({ path: path.join(__dirname, 'shot-print.pdf'), format: 'A4', printBackground: true });
   await page.emulateMedia({ media: 'screen' });
