@@ -39,7 +39,8 @@
   footer { padding:16px; text-align:center; font-size:12px; color:var(--gray); }
   #status { font-weight:600; }
   .note { border-left:4px solid var(--cyan); padding:6px 12px; margin:10px 0; font-size:14px; color:var(--navy); background:var(--grid); }
-  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; } }
+  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; }
+    canvas { width:100% !important; height:auto !important; } .card,canvas,table,.note { break-inside:avoid; } }
 </style>
 </head>
 <body>
@@ -90,6 +91,7 @@
   <div id="aBody" class="hide">
     <div class="cards" id="aCards"></div>
     <p class="muted" id="aQuality"></p>
+    <p class="muted" id="aVfcNote"></p>
     <h2>Trazado</h2>
     <div class="row">
       <label class="muted">Ventana
@@ -99,6 +101,9 @@
     <canvas id="trace" height="240"></canvas>
     <input type="range" id="aPos" min="0" max="0" step="1" value="0">
     <p class="muted" id="aPosInfo"></p>
+    <h2>Trazados de referencia</h2>
+    <p class="muted" id="snapMaxT"></p><canvas id="snapMax" height="150"></canvas>
+    <p class="muted" id="snapMinT"></p><canvas id="snapMin" height="150"></canvas>
     <h2>Síntomas marcados</h2>
     <table id="evTable"><thead><tr><th>Hora</th><th>FC ±10 s</th><th>Variabilidad (CV)</th></tr></thead><tbody></tbody></table>
     <p class="muted" id="evEmpty">Sin marcas.</p>
@@ -274,7 +279,7 @@ async function startStreams() {
   try {
     const bs = await server.getPrimaryService('battery_service');
     const bc = await bs.getCharacteristic('battery_level');
-    $('batt').textContent = (await bc.readValue()).getUint8(0) + '%';
+    S.battery = (await bc.readValue()).getUint8(0); $('batt').textContent = S.battery + '%';
   } catch (e) { /* opcional */ }
   S.lastTs = null; S.filt.reset();
 }
@@ -361,7 +366,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 function startRec() {
   S.rec = { id: Date.now(), startedAt: Date.now(), perf0: performance.now(), samples: new Int32Array(FS * 600), n: 0,
-    gaps: [], events: [], rrDevice: [], simulated: S.src === 'sim', lastCk: Date.now() };
+    gaps: [], events: [], rrDevice: [], simulated: S.src === 'sim', lastCk: Date.now(), battery: S.src === 'h10' ? S.battery : null };
   $('bRec').textContent = 'Detener y analizar'; $('bMark').disabled = false; $('bRec').disabled = false;
   wakeLock(true);
   $('recInfo').textContent = 'Grabando. Mantén la pantalla encendida y Chrome en primer plano: si el sistema suspende la página, la transmisión se corta.';
@@ -370,7 +375,7 @@ function startRec() {
 function recSnapshot(finished) {
   const r = S.rec, n = r.n;
   const meta = { id: r.id, startedAt: r.startedAt, n, durationS: n / FS, simulated: r.simulated, events: r.events.length, gaps: r.gaps.length, finished };
-  const data = { id: r.id, samples: r.samples.slice(0, n), gaps: r.gaps, events: r.events, rrDevice: r.rrDevice };
+  const data = { id: r.id, samples: r.samples.slice(0, n), gaps: r.gaps, events: r.events, rrDevice: r.rrDevice, battery: r.battery };
   return [meta, data];
 }
 
@@ -481,21 +486,29 @@ async function openAnalysis(id) {
   A.an = an;
   const lo = DSP.percentile(an.ecg, 0.001), hi = DSP.percentile(an.ecg, 0.999), pad = (hi - lo) * 0.15 || 100;
   A.yr = [lo - pad, hi + pad];
-  renderSummary(); renderEvents(); renderTables(); setupViewer(); drawTacho(); drawPoinc();
+  renderSummary(); renderSnaps(); renderEvents(); renderTables(); setupViewer(); drawTacho(); drawPoinc();
   $('aWait').classList.add('hide'); $('aBody').classList.remove('hide');
-  drawTrace();
+  drawTrace(); drawSnaps();
 }
 
 function renderSummary() {
   const m = A.an.metrics, an = A.an;
-  const card = (v, l) => `<div class="card"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  const card = (v, l, i) => `<div class="card"${i === undefined ? '' : ` data-i="${i}" style="cursor:pointer"`}><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  const pos = p => p ? fmtT(p.t) : '';
   $('aCards').innerHTML = m ? [
-    card(num(m.meanHR), 'FC media (lpm)'), card(num(m.minHR) + ' – ' + num(m.maxHR), 'FC mín–máx (10 latidos)'),
-    card(num(m.sdnn), 'SDNN (ms)'), card(num(m.rmssd), 'RMSSD (ms)'), card(num(m.pnn50, 1) + '%', 'pNN50'),
+    card(num(m.rmssd), 'VFC · RMSSD (ms)'),
+    card(num(m.meanHR), 'FC media (lpm)'),
+    card(num(m.maxHR), 'FC máx (10 latidos) · ' + pos(m.maxHRpos) + ' · toca para ver', m.maxHRpos && m.maxHRpos.i),
+    card(num(m.minHR), 'FC mín (10 latidos) · ' + pos(m.minHRpos) + ' · toca para ver', m.minHRpos && m.minHRpos.i),
+    m.hr1minMax ? card(num(m.hr1minMax.hr) + ' / ' + num(m.hr1minMin.hr), 'FC media 1 min: más alta / más baja') : '',
+    card(num(m.pctTachy, 1) + '% / ' + num(m.pctBrady, 1) + '%', 'Latidos >150 / <50 lpm'),
+    card(num(m.sdnn), 'SDNN (ms)'), card(num(m.pnn50, 1) + '%', 'pNN50'),
     card(m.flagged + ' (' + num(m.flaggedPct, 1) + '%)', 'Latidos corto/largo'), card(m.beats, 'Latidos válidos')
   ].join('') : card('--', 'Sin latidos válidos suficientes');
+  $('aCards').querySelectorAll('[data-i]').forEach(c => c.onclick = () => jumpTo(+c.dataset.i));
   $('aQuality').textContent = 'Señal utilizable: ' + num(an.validPct, 0) + '% · Huecos de conexión: ' + A.data.gaps.filter(g => g.ms > 0).length +
-    ' · Picos R detectados: ' + an.peaks.length;
+    ' · Picos R detectados: ' + an.peaks.length + (A.data.battery != null ? ' · Batería de la banda al conectar: ' + A.data.battery + '%' : '');
+  $('aVfcNote').textContent = 'VFC: Garmin muestra el promedio nocturno del RMSSD en ventanas de 5 min, medido durmiendo. Una grabación de 30–60 s despierto mide lo mismo (RMSSD) pero no es comparable de forma directa. Con latidos prematuros o ritmo irregular el RMSSD sube, así que en esos tramos no refleja recuperación.';
 }
 
 function windowStats(tc, half) {
@@ -505,6 +518,19 @@ function windowStats(tc, half) {
   return { hr: 60000 / m, cv: DSP.sd(rr) / m };
 }
 function evTime(ev) { return A.an.timeOf(Math.min(ev.idx, A.data.samples.length - 1)); }
+
+function renderSnaps() {
+  const m = A.an.metrics, L = 10 * FS;
+  for (const [id, pos, name] of [['snapMax', m && m.maxHRpos, 'FC máxima'], ['snapMin', m && m.minHRpos, 'FC mínima']]) {
+    $(id).classList.toggle('hide', !pos); $(id + 'T').classList.toggle('hide', !pos);
+    if (!pos) continue;
+    $(id + 'T').textContent = `${name}: ${num(pos.hr ?? (id === 'snapMax' ? m.maxHR : m.minHR))} lpm (promedio de 10 latidos) a los ${fmtT(pos.t)}`;
+    A['snap_' + id] = Math.round(pos.i - L / 2);
+  }
+}
+function drawSnaps() {
+  for (const id of ['snapMax', 'snapMin']) if (A['snap_' + id] !== undefined && !$(id).classList.contains('hide')) drawTraceOn($(id), A['snap_' + id], 10 * FS);
+}
 
 function renderEvents() {
   const tb = $('evTable').querySelector('tbody'); tb.innerHTML = '';
@@ -551,8 +577,14 @@ $('aPeaks').onchange = drawTrace;
 
 function drawTrace() {
   if (!A.an) return;
-  const an = A.an, n = an.ecg.length, L = Math.min(viewLen(), n), i0 = Math.min(A.view.i0, n - L), i1 = i0 + L;
-  const cv = $('trace'), { g, w, h } = setupCanvas(cv), [lo, hi] = A.yr;
+  const i0 = drawTraceOn($('trace'), A.view.i0, viewLen());
+  $('aPosInfo').textContent = `Desde ${fmtT(A.an.timeOf(i0))} · pico R: círculo; marcado corto/largo: círculo oscuro con anillo; sombreado gris: señal descartada por calidad; número inferior: RR en ms.`;
+}
+
+// Dibuja la señal filtrada con picos R, huecos y síntomas. Devuelve el índice inicial usado.
+function drawTraceOn(cv, i0req, Lreq) {
+  const an = A.an, n = an.ecg.length, L = Math.min(Lreq, n), i0 = Math.max(0, Math.min(i0req, n - L)), i1 = i0 + L;
+  const { g, w, h } = setupCanvas(cv), [lo, hi] = A.yr;
   drawGrid(g, w, h, L / FS, hi, lo);
   const xs = w / L, ys = h / (hi - lo);
   for (const [a, b] of an.badRanges) {
@@ -565,25 +597,23 @@ function drawTrace() {
     i === i0 ? g.moveTo(x, y) : g.lineTo(x, y);
   }
   g.stroke();
-  // huecos de conexión
-  g.setLineDash([4, 4]); g.strokeStyle = C.gray;
+  g.setLineDash([4, 4]); g.strokeStyle = C.gray; g.lineWidth = 1;
   for (const gp of A.data.gaps) if (gp.ms > 0 && gp.idx >= i0 && gp.idx <= i1) { const x = (gp.idx - i0) * xs; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
   g.setLineDash([]);
-  // síntomas
   g.fillStyle = C.cyan; g.font = '12px system-ui';
   for (const ev of A.data.events) if (ev.idx >= i0 && ev.idx <= i1) {
     const x = (ev.idx - i0) * xs; g.fillRect(x - 1, 0, 3, h); g.fillText('síntoma', x + 5, 14);
   }
-  if ($('aPeaks').checked) for (const b of an.beats) {
+  if (cv.id !== 'trace' || $('aPeaks').checked) for (const b of an.beats) {
     if (b.i < i0 || b.i >= i1) continue;
     const x = (b.i - i0) * xs, y = (hi - an.ecg[b.i]) * ys;
     g.beginPath(); g.arc(x, Math.max(6, y - 8), 4, 0, 7); g.fillStyle = b.flag ? C.navy : C.cyan; g.fill();
     if (b.flag) { g.strokeStyle = C.cyan; g.lineWidth = 2; g.stroke(); g.fillStyle = C.navy; g.fillText(b.flag, x + 7, Math.max(16, y - 4)); }
     if (b.rr) { g.fillStyle = C.gray; g.fillText(Math.round(b.rr), x - 12, h - 6); }
   }
-  $('aPosInfo').textContent = `Desde ${fmtT(an.timeOf(i0))} · pico R: círculo; marcado corto/largo: círculo oscuro con anillo; sombreado gris: señal descartada por calidad; número inferior: RR en ms.`;
+  return i0;
 }
-window.addEventListener('resize', () => { if (A.an) { drawTrace(); drawTacho(); drawPoinc(); } });
+window.addEventListener('resize', () => { if (A.an) { drawTrace(); drawSnaps(); drawTacho(); drawPoinc(); } });
 
 function drawTacho() {
   const { g, w, h } = setupCanvas($('tacho')), bs = A.an.beats.filter(b => b.ok);

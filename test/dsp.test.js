@@ -78,6 +78,19 @@ test('ruido alto (EMG) se excluye de las métricas', () => {
   assert.ok(a.validPct < 60, 'validPct ' + a.validPct);
 });
 
+test('métricas nuevas: FC máx/mín con posición, FC 1 min, taqui/bradi', () => {
+  // 12 min a 60 lpm, con un tramo de 1 min a ~100 lpm entre el min 5 y 6
+  const rrSeq = k => (k >= 300 && k < 400 ? 0.6 : 1.0);
+  const x = gen(720, { rrSeq, seed: 4, noise: 5 });
+  const a = DSP.analyze(x, DSP.FS, []);
+  const m = a.metrics;
+  assert.ok(m.maxHR > 95 && m.maxHR < 105, 'maxHR ' + m.maxHR);
+  assert.ok(Math.abs(m.minHR - 60) < 2, 'minHR ' + m.minHR);
+  assert.ok(m.maxHRpos.t > 295 && m.maxHRpos.t < 420, 'posición máx ' + m.maxHRpos.t);
+  assert.ok(m.hr1minMax.hr > 90 && m.hr1minMin.hr < 62, `1min ${m.hr1minMax.hr}/${m.hr1minMin.hr}`);
+  assert.strictEqual(m.pctTachy, 0); assert.strictEqual(m.pctBrady, 0);
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;

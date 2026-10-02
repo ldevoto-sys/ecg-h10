@@ -241,21 +241,40 @@
     }
 
     // Métricas globales
-    const rr = beats.filter(b => b.ok).map(b => b.rr);
+    const okBeats = beats.filter(b => b.ok);
+    const rr = okBeats.map(b => b.rr);
     let metrics = null;
     if (rr.length >= 2) {
-      const diffs = [];
+      const dpairs = []; // diferencias sucesivas válidas, con el tiempo del 2º latido
       for (let k = 1; k < beats.length; k++) {
-        if (beats[k].ok && beats[k - 1].ok) diffs.push(beats[k].rr - beats[k - 1].rr);
+        if (beats[k].ok && beats[k - 1].ok) dpairs.push({ t: beats[k].t, d: beats[k].rr - beats[k - 1].rr });
       }
+      const diffs = dpairs.map(x => x.d);
       const m = mean(rr);
-      const ma = [];
-      for (let k = 9; k < rr.length; k++) ma.push(60000 / mean(rr.slice(k - 9, k + 1)));
+      // FC con promedio móvil de 10 latidos: máximo y mínimo con su posición
+      let maxHR = null, minHR = null;
+      for (let k = 9; k < okBeats.length; k++) {
+        const hr = 60000 / mean(rr.slice(k - 9, k + 1)), o = { hr, t: okBeats[k].t, i: okBeats[k].i };
+        if (!maxHR || hr > maxHR.hr) maxHR = o;
+        if (!minHR || hr < minHR.hr) minHR = o;
+      }
+      // FC media en ventanas de 60 s (paso 10 s, mínimo 30 latidos)
+      let hr1minMax = null, hr1minMin = null;
+      for (let s0 = okBeats[0].t, lo = 0, hi = 0; s0 + 60 <= okBeats[okBeats.length - 1].t; s0 += 10) {
+        while (lo < okBeats.length && okBeats[lo].t <= s0) lo++;
+        while (hi < okBeats.length && okBeats[hi].t <= s0 + 60) hi++;
+        if (hi - lo < 30) continue;
+        const hr = 60000 / mean(rr.slice(lo, hi)), o = { hr, t: s0, i: okBeats[lo].i };
+        if (!hr1minMax || hr > hr1minMax.hr) hr1minMax = o;
+        if (!hr1minMin || hr < hr1minMin.hr) hr1minMin = o;
+      }
       metrics = {
         beats: rr.length,
         meanHR: 60000 / m,
-        minHR: ma.length ? Math.min(...ma) : null,
-        maxHR: ma.length ? Math.max(...ma) : null,
+        minHR: minHR && minHR.hr, maxHR: maxHR && maxHR.hr, minHRpos: minHR, maxHRpos: maxHR,
+        hr1minMax, hr1minMin,
+        pctTachy: 100 * rr.filter(v => v < 400).length / rr.length,   // >150 lpm
+        pctBrady: 100 * rr.filter(v => v > 1200).length / rr.length,  // <50 lpm
         meanRR: m,
         sdnn: sd(rr),
         rmssd: diffs.length ? Math.sqrt(mean(diffs.map(d => d * d))) : null,

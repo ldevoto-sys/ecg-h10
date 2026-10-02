@@ -98,6 +98,10 @@ const MOCK = `
   await page.locator('#trace').screenshot({ path: path.join(__dirname, 'shot-trace.png') });
   console.log('ok  - análisis: FC', info.hr.toFixed(1), 'lpm, huecos', info.gaps.join(', '), 'ms');
 
+  await page.emulateMedia({ media: 'print' });
+  await page.pdf({ path: path.join(__dirname, 'shot-print.pdf'), format: 'A4', printBackground: true });
+  await page.emulateMedia({ media: 'screen' });
+  assert.ok((await page.textContent('#aCards')).includes('RMSSD'), 'tarjeta RMSSD');
   // exportación
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#xBeats')]);
   assert.ok(dl.suggestedFilename().endsWith('_latidos.csv'));
