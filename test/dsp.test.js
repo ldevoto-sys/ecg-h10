@@ -91,6 +91,20 @@ test('métricas nuevas: FC máx/mín con posición, FC 1 min, taqui/bradi', () =
   assert.strictEqual(m.pctTachy, 0); assert.strictEqual(m.pctBrady, 0);
 });
 
+test('indicador de irregularidad: regular=baja, azar=alta/al azar, bigeminismo=alta/alternante', () => {
+  const run = o => DSP.analyze(gen(60, o), DSP.FS, []).irregularity;
+  const reg = run({ hr: 75, seed: 3 }), af = run({ irregular: true, seed: 5 }), big = run({ rrSeq: k => (k % 2 ? 1.0 : 0.5), seed: 6 });
+  assert.strictEqual(reg.level, 'baja'); assert.strictEqual(reg.pattern, null);
+  assert.strictEqual(af.level, 'alta'); assert.strictEqual(af.pattern, 'al azar');
+  assert.strictEqual(big.level, 'alta'); assert.strictEqual(big.pattern, 'alternante');
+});
+
+test('polaridad: QRS negativo dominante no alterna entre R y S (RR estable)', () => {
+  const x = gen(90, { hr: 70, seed: 8, noise: 5 }).map(v => -v); // señal invertida
+  const a = DSP.analyze(x, DSP.FS, []);
+  assert.ok(a.metrics.sdnn < 40 && Math.abs(a.metrics.meanHR - 70) < 2, 'SDNN ' + a.metrics.sdnn + ' FC ' + a.metrics.meanHR);
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;

@@ -17,7 +17,12 @@
     flatUv: 30,                     // rango < esto => sin señal
     noiseRatio: 0.15,               // RMS de ruido de alta frecuencia / rango de la señal
     satUv: 8000,                    // |señal| > esto => saturación / movimiento
-    irrWinBeats: 30, irrStep: 10    // ventana de irregularidad (latidos)
+    irrWinBeats: 30, irrStep: 10,   // ventana de irregularidad (latidos)
+    // Umbrales PROVISIONALES de irregularidad (CV de los RR), elegidos con 3 grabaciones de 30 s
+    // (2 con FA: CV 0,27–0,31; 1 con latidos prematuros: 0,23) frente a ritmo regular (0,025–0,056).
+    irrLow: 0.10, irrHigh: 0.20,
+    // Patrón de los RR: fracción de cambios de signo entre diferencias sucesivas (0,67 = al azar, 1 = alternante)
+    altMin: 0.80, lag1Max: -0.3
   };
 
   // ---------- Filtros ----------
@@ -134,15 +139,23 @@
       const ref = percentile(amp.slice(lo, hi), 0.75);
       if (amp[j] >= 0.35 * ref) keep.push(cand[j]);
     }
-    // Refinar sobre la señal filtrada 0.5–40 Hz
+    // Refinar sobre la señal filtrada 0.5–40 Hz, con polaridad dominante del QRS
+    // (evita alternar entre R y S, que desplaza el latido 20–30 ms y ensucia RMSSD/CV)
     const r = Math.round(0.1 * fs);
-    const refined = keep.map(c => {
-      let m = c, mv = -1;
+    const ext = keep.map(c => {
+      let mx = -Infinity, mxi = c, mn = Infinity, mni = c;
       for (let k = Math.max(0, c - r); k <= Math.min(n - 1, c + r); k++) {
-        const v = Math.abs(ecg[k]);
-        if (v > mv) { mv = v; m = k; }
+        if (ecg[k] > mx) { mx = ecg[k]; mxi = k; }
+        if (ecg[k] < mn) { mn = ecg[k]; mni = k; }
       }
-      return m;
+      return { mx, mxi, mn, mni };
+    });
+    const posVotes = ext.filter(e => e.mx > -e.mn).length;
+    const dom = posVotes * 2 >= ext.length ? 1 : -1;
+    const refined = ext.map(e => {
+      const domAmp = dom > 0 ? e.mx : -e.mn, othAmp = dom > 0 ? -e.mn : e.mx;
+      const useDom = !(othAmp > 1.5 * domAmp); // QRS de polaridad opuesta (p. ej. prematuro ventricular): usar su pico
+      return (useDom ? dom > 0 : dom < 0) ? e.mxi : e.mni;
     }).sort((a, b) => a - b);
     const out = [];
     for (const p of refined) {
@@ -304,9 +317,35 @@
     for (const b of beats) { if (b.ok) run.push(b); else flush(); }
     flush();
 
+    // Indicador de irregularidad de los RR y patrón (descriptivo, provisional)
+    let irregularity = null;
+    if (metrics) {
+      const runs = []; let cur = [];
+      for (const b of beats) { if (b.ok) cur.push(b.rr); else { if (cur.length) runs.push(cur); cur = []; } }
+      if (cur.length) runs.push(cur);
+      let alt = 0, nTrip = 0, num = 0, den = 0;
+      const allRR = runs.flat(), mRR = mean(allRR);
+      for (const run of runs) {
+        for (let k = 2; k < run.length; k++) {
+          const d1 = run[k - 1] - run[k - 2], d2 = run[k] - run[k - 1];
+          if (d1 !== 0 && d2 !== 0) { nTrip++; if (d1 * d2 < 0) alt++; }
+        }
+        for (let k = 1; k < run.length; k++) num += (run[k] - mRR) * (run[k - 1] - mRR);
+      }
+      for (const v of allRR) den += (v - mRR) * (v - mRR);
+      const cv = windows.length ? median(windows.map(w => w.cv)) : (allRR.length >= 20 ? sd(allRR) / mRR : null);
+      if (cv !== null) {
+        const level = cv < cfg.irrLow ? 'baja' : cv > cfg.irrHigh ? 'alta' : 'intermedia';
+        const alternation = nTrip >= 10 ? alt / nTrip : null, lag1 = den > 0 ? num / den : null;
+        let pattern = null;
+        if (level !== 'baja' && alternation !== null && lag1 !== null) pattern = (alternation >= cfg.altMin && lag1 <= cfg.lag1Max) ? 'alternante' : 'al azar';
+        irregularity = { cv, level, pattern, alternation, lag1, source: windows.length ? 'ventanas de 30 latidos' : 'toda la grabación' };
+      }
+    }
+
     const badSamples = bad.reduce((s, v) => s + v, 0);
     return {
-      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows,
+      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows, irregularity,
       durationS: timeOf(n - 1) + 1 / fs,
       validPct: n ? 100 * (1 - badSamples / n) : 0
     };

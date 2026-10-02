@@ -92,6 +92,7 @@
     <div class="cards" id="aCards"></div>
     <p class="muted" id="aQuality"></p>
     <p class="muted" id="aVfcNote"></p>
+    <div class="note" id="aIrrNote"></div>
     <h2>Trazado</h2>
     <div class="row">
       <label class="muted">Ventana
@@ -266,10 +267,17 @@ async function startStreams() {
   S.data.addEventListener('characteristicvaluechanged', onPmd);
   await S.ctrl.startNotifications();
   await S.data.startNotifications();
-  const w = waitCtrl(0x02);
-  await S.ctrl.writeValueWithResponse(ECG_START);
-  const status = await w;
-  if (status !== 0) throw new Error('La banda rechazó el inicio de ECG (código ' + status + ')');
+  // Si un intento anterior dejó el ECG activo en la banda, detenerlo antes de iniciar.
+  try { const ws = waitCtrl(0x03, 1500); await S.ctrl.writeValueWithResponse(ECG_STOP); await ws; } catch (e) { /* sin ECG activo */ }
+  await new Promise(r => setTimeout(r, 300));
+  const frames0 = S.frames;
+  let status = null;
+  try { const w = waitCtrl(0x02); await S.ctrl.writeValueWithResponse(ECG_START); status = await w; } catch (e) { status = null; }
+  if (status !== 0) {
+    // Si igual llegan tramas de ECG, la banda ya está transmitiendo: seguir.
+    for (let k = 0; k < 20 && S.frames === frames0; k++) await new Promise(r => setTimeout(r, 100));
+    if (S.frames === frames0) throw new Error('La banda no inició el ECG (' + (status === null ? 'sin respuesta' : 'código ' + status) + ')');
+  }
   try {
     const hrs = await server.getPrimaryService('heart_rate');
     S.hrChar = await hrs.getCharacteristic('heart_rate_measurement');
@@ -299,8 +307,9 @@ async function connectH10() {
     S.connected = true; setStreaming(true);
     setStatus('Conectado a ' + S.device.name + ' · transmitiendo ECG');
   } catch (e) {
-    if (e.name === 'NotFoundError') setStatus('Sin conexión.'); else setStatus('Error: ' + e.message);
-    if (!S.rec) teardown();
+    const msg = e.name === 'NotFoundError' ? 'Sin conexión.' : 'Error al conectar: ' + (e.message || e.name) + '. Revisa la banda y vuelve a intentar.';
+    if (!S.rec) await teardown();
+    setStatus(msg);
   }
 }
 
@@ -309,8 +318,9 @@ async function onDisconnected() {
   if (!S.wantStream || S.reconnecting) return;
   S.reconnecting = true;
   const discAt = Date.now();
+  let lastErr = '';
   for (let k = 1; S.wantStream && k <= 120; k++) {
-    setStatus('Conexión perdida. Reintentando (' + k + ')…' + (S.rec ? ' La grabación sigue abierta.' : ''));
+    setStatus('Conexión perdida. Reintentando (' + k + ')…' + (S.rec ? ' La grabación sigue abierta.' : '') + (lastErr ? ' Último error: ' + lastErr : ''));
     try {
       await new Promise(r => setTimeout(r, Math.min(1000 * k, 5000)));
       if (!S.wantStream) break;
@@ -320,14 +330,16 @@ async function onDisconnected() {
       if (S.rec) S.rec.gaps.push({ idx: S.rec.n, ms: Date.now() - discAt, wall: Date.now(), reconnect: true });
       setStatus('Reconectado · transmitiendo ECG');
       return;
-    } catch (e) { /* reintenta */ }
+    } catch (e) { lastErr = e.message || e.name; }
   }
   S.reconnecting = false;
   if (S.wantStream) setStatus('No se pudo reconectar. Revisa la banda.');
 }
 
-function teardown() {
+async function teardown() {
   S.wantStream = false; S.connected = false;
+  // dejar la banda sin ECG activo para que el próximo intento parta limpio
+  try { if (S.src === 'h10' && S.ctrl && S.device && S.device.gatt.connected) await S.ctrl.writeValueWithResponse(ECG_STOP); } catch (e) {}
   try { if (S.device && S.device.gatt.connected) S.device.gatt.disconnect(); } catch (e) {}
   clearInterval(S.simTimer); S.simTimer = null; S.src = null; S.device = null;
   $('modeBadge').classList.add('hide');
@@ -336,8 +348,7 @@ function teardown() {
 
 async function disconnect() {
   if (S.rec) await stopRec();
-  if (S.src === 'h10' && S.ctrl && S.device && S.device.gatt.connected) { try { await S.ctrl.writeValueWithResponse(ECG_STOP); } catch (e) {} }
-  teardown();
+  await teardown();
 }
 
 /* ---------- Simulador ---------- */
@@ -497,6 +508,7 @@ function renderSummary() {
   const pos = p => p ? fmtT(p.t) : '';
   $('aCards').innerHTML = m ? [
     card(num(m.rmssd), 'VFC · RMSSD (ms)'),
+    an.irregularity ? card(an.irregularity.level[0].toUpperCase() + an.irregularity.level.slice(1), 'Irregularidad de intervalos (provisional) · CV ' + num(an.irregularity.cv, 2)) : '',
     card(num(m.meanHR), 'FC media (lpm)'),
     card(num(m.maxHR), 'FC máx (10 latidos) · ' + pos(m.maxHRpos) + ' · toca para ver', m.maxHRpos && m.maxHRpos.i),
     card(num(m.minHR), 'FC mín (10 latidos) · ' + pos(m.minHRpos) + ' · toca para ver', m.minHRpos && m.minHRpos.i),
@@ -508,6 +520,13 @@ function renderSummary() {
   $('aCards').querySelectorAll('[data-i]').forEach(c => c.onclick = () => jumpTo(+c.dataset.i));
   $('aQuality').textContent = 'Señal utilizable: ' + num(an.validPct, 0) + '% · Huecos de conexión: ' + A.data.gaps.filter(g => g.ms > 0).length +
     ' · Picos R detectados: ' + an.peaks.length + (A.data.battery != null ? ' · Batería de la banda al conectar: ' + A.data.battery + '%' : '');
+  const ir = an.irregularity, PAT = {
+    'alternante': 'intervalos que alternan largo-corto, descrito en latidos prematuros que se repiten cada dos latidos',
+    'al azar': 'intervalos que varían sin orden, descrito en ritmos irregularmente irregulares como la fibrilación auricular' };
+  $('aIrrNote').textContent = !ir ? 'Irregularidad: muy pocos latidos válidos para calcularla.' :
+    (ir.level === 'baja' ? `Intervalos regulares (CV ${num(ir.cv, 3)}, ${ir.source}).` :
+     `Irregularidad ${ir.level} (CV ${num(ir.cv, 3)}, ${ir.source})` + (ir.pattern ? `. Patrón ${ir.pattern}: ${PAT[ir.pattern]}.` : '.')) +
+    ' Indicador provisional: umbrales elegidos con 3 grabaciones de 30 s. No diagnostica, no distingue ruido y que salga baja no descarta una arritmia. Revisa el trazado.';
   $('aVfcNote').textContent = 'VFC: Garmin muestra el promedio nocturno del RMSSD en ventanas de 5 min, medido durmiendo. Una grabación de 30–60 s despierto mide lo mismo (RMSSD) pero no es comparable de forma directa. Con latidos prematuros o ritmo irregular el RMSSD sube, así que en esos tramos no refleja recuperación.';
 }
 
@@ -660,7 +679,7 @@ $('xBeats').onclick = () => {
 };
 $('xJson').onclick = () => download(base() + '_resumen.json', JSON.stringify({
   inicio: new Date(A.meta.startedAt).toISOString(), duracion_s: A.meta.durationS, simulada: A.meta.simulated, fs: FS,
-  metricas: A.an.metrics, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
+  metricas: A.an.metrics, irregularidad: A.an.irregularity, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
   sintomas: A.data.events.map(e => ({ hora: new Date(e.wall).toISOString(), t_s: evTime(e), ...windowStats(evTime(e), 10) })),
   ventanas_mas_irregulares: [...A.an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5),
   umbrales: DSP.CFG, nota: 'Heurísticos no calibrados. Sin fines médicos.'

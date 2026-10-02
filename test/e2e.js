@@ -33,17 +33,25 @@ const MOCK = `
       send(hr, [0x10, 72, 0x00, 0x04]); // flags: RR presente; RR = 1024 -> 1000 ms
     }, 40);
   }
+  data.startNotifications = async () => { if (M.preStream && !M.timer) startFrames(); };
   ctrl.writeValueWithResponse = async v => {
-    M.startBytes = Array.from(new Uint8Array(v.buffer || v));
-    setTimeout(() => { send(ctrl, [0xF0, 0x02, 0x00, 0x00, 0x00]); startFrames(); }, 20);
+    const b = Array.from(new Uint8Array(v.buffer || v));
+    if (b[0] === 0x03) { // STOP
+      if (!M.ignoreStop) clearInterval(M.timer), M.timer = null;
+      setTimeout(() => send(ctrl, [0xF0, 0x03, 0x00, 0x00, 0x00]), 10); return;
+    }
+    M.startBytes = b;
+    const already = !!M.timer; // ya transmitiendo desde un intento anterior
+    if (M.dead) { setTimeout(() => send(ctrl, [0xF0, 0x02, 0x00, 0x08, 0x00]), 20); return; } // banda que rechaza y no transmite
+    setTimeout(() => { send(ctrl, [0xF0, 0x02, 0x00, already ? 0x06 : 0x00, 0x00]); if (!already) startFrames(); }, 20);
   };
   const svc = { pmd: { getCharacteristic: async u => u.endsWith('81-02e7-f387-1cad-8acd2d8df0c8') ? ctrl : data },
                 heart_rate: { getCharacteristic: async () => hr },
                 battery_service: { getCharacteristic: async () => Object.assign(batt, { readValue: async () => new DataView(Uint8Array.from([87]).buffer) }) } };
   dev.gatt = { connected: false,
     async connect() { M.connects++; dev.gatt.connected = true; return { getPrimaryService: async n => n.startsWith('fb005c80') ? svc.pmd : svc[n] }; },
-    disconnect() { dev.gatt.connected = false; clearInterval(M.timer); } };
-  M.drop = () => { clearInterval(M.timer); dev.gatt.connected = false; dev.dispatchEvent(new Event('gattserverdisconnected')); };
+    disconnect() { dev.gatt.connected = false; clearInterval(M.timer); M.timer = null; } };
+  M.drop = () => { clearInterval(M.timer); M.timer = null; dev.gatt.connected = false; dev.dispatchEvent(new Event('gattserverdisconnected')); };
   Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async () => dev }, configurable: true });
 })();`;
 
@@ -60,6 +68,8 @@ const MOCK = `
   await page.addInitScript(MOCK);
   await page.goto(url);
 
+  // Escenario previo: la banda quedó transmitiendo y rechaza el inicio con 'estado inválido' (6)
+  await page.evaluate(() => { window.__mock.ignoreStop = true; window.__mock.preStream = true; });
   await page.click('#bConnect');
   await page.waitForFunction(() => document.getElementById('status').textContent.includes('transmitiendo'));
   const start = await page.evaluate(() => window.__mock.startBytes);
@@ -75,7 +85,7 @@ const MOCK = `
   await page.screenshot({ path: path.join(__dirname, 'shot-live.png') });
   // corte de conexión + reconexión automática
   await page.evaluate(() => window.__mock.drop());
-  await page.waitForFunction(() => document.getElementById('status').textContent.includes('Reconectado'), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('status').textContent.includes('Reconectado'), null, { timeout: 15000 }).catch(async e => { console.log('estado:', await page.textContent('#status'), await page.evaluate(() => JSON.stringify({ frames: S.frames, connects: __mock.connects, timer: !!__mock.timer }))); throw e; });
   assert.ok(await page.evaluate(() => window.__mock.connects) >= 2);
   await page.waitForFunction(() => S.rec.n > 130 * 75);
   console.log('ok  - grabación, hueco de trama y reconexión automática');
@@ -112,6 +122,17 @@ const MOCK = `
   await page.waitForSelector('#sessTable tbody tr');
   assert.ok((await page.textContent('#sessTable tbody')).includes('hueco'));
   console.log('ok  - sesión guardada en IndexedDB');
+
+  // error visible: banda que rechaza el ECG y no transmite
+  await page.reload();
+  await page.evaluate(() => { window.__mock.dead = true; });
+  await page.click('#bConnect');
+  await page.waitForFunction(() => document.getElementById('status').textContent.includes('Error al conectar'), null, { timeout: 8000 });
+  await page.waitForTimeout(1200);
+  const msg = await page.textContent('#status');
+  assert.ok(msg.includes('código 8'), 'mensaje de error persistente con código: ' + msg);
+  assert.ok(await page.isEnabled('#bConnect'), 'se puede reintentar');
+  console.log('ok  - error de conexión visible y reintentable:', msg);
 
   // simulador
   await page.reload(); await page.click('#bSim');
