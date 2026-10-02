@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#112548">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%23112548%27/%3E%3Cpath d=%27M2 17h8l3-9 5 17 3-8h9%27 fill=%27none%27 stroke=%27%2334B3DE%27 stroke-width=%273%27/%3E%3C/svg%3E">
+<title>ECG H10</title>
+<style>
+  :root { --navy:#112548; --cyan:#34B3DE; --white:#FFFFFF; --gray:#555555;
+          --line:rgba(17,37,72,.18); --grid:rgba(52,179,222,.22); --grid2:rgba(52,179,222,.45); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--white); color:var(--navy); font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { background:var(--navy); color:var(--white); padding:12px 16px; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; font-weight:600; flex:1; }
+  .badge { background:var(--cyan); color:var(--navy); font-size:12px; font-weight:700; padding:2px 8px; border-radius:10px; }
+  nav { display:flex; border-bottom:1px solid var(--line); }
+  nav button { flex:1; padding:12px 8px; border:0; background:none; color:var(--gray); font:inherit; font-weight:600; border-bottom:3px solid transparent; }
+  nav button.on { color:var(--navy); border-bottom-color:var(--cyan); }
+  main { padding:16px; max-width:900px; margin:0 auto; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+  button.b { border:2px solid var(--navy); background:var(--navy); color:var(--white); padding:10px 14px; border-radius:8px; font:inherit; font-weight:600; }
+  button.b.alt { background:var(--white); color:var(--navy); }
+  button.b:disabled { opacity:.35; }
+  .muted { color:var(--gray); font-size:14px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin:12px 0; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .card .v { font-size:26px; font-weight:700; line-height:1.1; }
+  .card .l { font-size:13px; color:var(--gray); }
+  canvas { width:100%; display:block; border:1px solid var(--line); border-radius:8px; background:var(--white); touch-action:pan-y; }
+  h2 { font-size:17px; margin:20px 0 6px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--gray); font-weight:600; }
+  tr.click { cursor:pointer; } tr.click:hover { background:var(--grid); }
+  input[type=range] { width:100%; accent-color:var(--cyan); }
+  select,input[type=text] { font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; color:var(--navy); background:var(--white); }
+  .hide { display:none; }
+  footer { padding:16px; text-align:center; font-size:12px; color:var(--gray); }
+  #status { font-weight:600; }
+  .note { border-left:4px solid var(--cyan); padding:6px 12px; margin:10px 0; font-size:14px; color:var(--navy); background:var(--grid); }
+  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; } }
+</style>
+</head>
+<body>
+<header><h1>ECG · Polar H10</h1><span id="modeBadge" class="badge hide">SIMULADO</span></header>
+<nav>
+  <button id="t-live" class="on">En vivo</button>
+  <button id="t-sessions">Sesiones</button>
+  <button id="t-analysis" class="hide">Análisis</button>
+</nav>
+
+<main>
+<!-- EN VIVO -->
+<section id="v-live">
+  <div class="row">
+    <button class="b" id="bConnect">Conectar H10</button>
+    <button class="b alt" id="bSim">Simulador</button>
+    <button class="b alt" id="bDisc" disabled>Desconectar</button>
+  </div>
+  <p id="status" class="muted">Sin conexión.</p>
+  <div class="cards">
+    <div class="card"><div class="v" id="hr">--</div><div class="l">FC (lpm)</div></div>
+    <div class="card"><div class="v" id="rrv">--</div><div class="l">Último RR (ms)</div></div>
+    <div class="card"><div class="v" id="timer">00:00</div><div class="l">Grabación</div></div>
+    <div class="card"><div class="v" id="batt">--</div><div class="l">Batería</div></div>
+  </div>
+  <canvas id="live" height="220"></canvas>
+  <p class="muted" id="liveInfo">Trazado filtrado 0.5–40 Hz + notch 50 Hz. Cuadrícula: 0,2 s × 0,5 mV (grande).</p>
+  <div class="row">
+    <button class="b" id="bRec" disabled>Iniciar grabación</button>
+    <button class="b alt" id="bMark" disabled>Marcar síntoma</button>
+  </div>
+  <p class="muted" id="recInfo"></p>
+  <div class="note">Antes de conectar: humedece los electrodos de la banda, ajústala bajo el pecho y activa el Bluetooth y la ubicación del teléfono (Chrome lo exige para buscar dispositivos). Cierra otras apps que usen la H10; solo admite un par de conexiones.</div>
+</section>
+
+<!-- SESIONES -->
+<section id="v-sessions" class="hide">
+  <h2>Sesiones guardadas en este teléfono</h2>
+  <table id="sessTable"><thead><tr><th>Inicio</th><th>Duración</th><th>Notas</th></tr></thead><tbody></tbody></table>
+  <p class="muted" id="sessEmpty">No hay sesiones.</p>
+  <div class="row"><label class="b alt" style="cursor:pointer">Importar CSV (t_s,uV)<input id="fImport" type="file" accept=".csv" hidden></label></div>
+</section>
+
+<!-- ANÁLISIS -->
+<section id="v-analysis" class="hide">
+  <h2 id="aTitle"></h2>
+  <p class="muted" id="aWait">Analizando…</p>
+  <div id="aBody" class="hide">
+    <div class="cards" id="aCards"></div>
+    <p class="muted" id="aQuality"></p>
+    <h2>Trazado</h2>
+    <div class="row">
+      <label class="muted">Ventana
+        <select id="aWin"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="20">20 s</option></select></label>
+      <label class="muted"><input type="checkbox" id="aPeaks" checked> Picos R</label>
+    </div>
+    <canvas id="trace" height="240"></canvas>
+    <input type="range" id="aPos" min="0" max="0" step="1" value="0">
+    <p class="muted" id="aPosInfo"></p>
+    <h2>Síntomas marcados</h2>
+    <table id="evTable"><thead><tr><th>Hora</th><th>FC ±10 s</th><th>Variabilidad (CV)</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="evEmpty">Sin marcas.</p>
+    <h2>Variabilidad latido a latido</h2>
+    <canvas id="tacho" height="160"></canvas>
+    <p class="muted">Tacograma: RR (ms) en el tiempo. Los latidos marcados (corto/largo) aparecen con anillo.</p>
+    <canvas id="poinc" height="260"></canvas>
+    <p class="muted">Poincaré: cada punto es RR(n) contra RR(n+1).</p>
+    <h2>Ventanas de 30 latidos más irregulares</h2>
+    <table id="winTable"><thead><tr><th>Hora</th><th>FC</th><th>CV</th><th>ΔRR&gt;50 ms</th></tr></thead><tbody></tbody></table>
+    <h2>Latidos marcados corto/largo</h2>
+    <p class="muted" id="flagInfo"></p>
+    <table id="flagTable"><thead><tr><th>Hora</th><th>RR</th><th>Tipo</th></tr></thead><tbody></tbody></table>
+    <h2>Exportar</h2>
+    <div class="row">
+      <button class="b alt" id="xRaw">CSV señal</button>
+      <button class="b alt" id="xBeats">CSV latidos</button>
+      <button class="b alt" id="xJson">JSON resumen</button>
+      <button class="b alt" id="xPrint">Informe / PDF</button>
+      <button class="b alt" id="xDel">Eliminar sesión</button>
+    </div>
+    <div class="note">Los umbrales de calidad de señal y de marcado corto/largo (±20 % de la mediana local) son heurísticos y no están calibrados. Revisa siempre el trazado antes de confiar en una marca. Esta herramienta no diagnostica ni reemplaza a un médico ni a un examen.</div>
+  </div>
+</section>
+</main>
+<footer>Uso personal, sin fines médicos. No diagnostica ni reemplaza a un médico ni a un examen. Una sola derivación, 130 Hz.</footer>
+
+<script src="dsp.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const FS = DSP.FS;
+const C = { navy:'#112548', cyan:'#34B3DE', gray:'#555555', grid:'rgba(52,179,222,.22)', grid2:'rgba(52,179,222,.45)' };
+const UUID = {
+  pmd: 'fb005c80-02e7-f387-1cad-8acd2d8df0c8',
+  ctrl: 'fb005c81-02e7-f387-1cad-8acd2d8df0c8',
+  data: 'fb005c82-02e7-f387-1cad-8acd2d8df0c8'
+};
+// Inicio de ECG: tipo 0, sample rate 130 Hz (0x0082), resolución 14 bits (0x000E)
+const ECG_START = new Uint8Array([0x02, 0x00, 0x00, 0x01, 0x82, 0x00, 0x01, 0x01, 0x0E, 0x00]);
+const ECG_STOP = new Uint8Array([0x03, 0x00]);
+
+const fmtT = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); };
+const fmtDate = ms => new Date(ms).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'medium' });
+const fmtClock = ms => new Date(ms).toLocaleTimeString('es-CL');
+const num = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v)) ? '--' : v.toFixed(d);
+
+/* ---------- Pestañas ---------- */
+function show(view) {
+  for (const v of ['live', 'sessions', 'analysis']) {
+    $('v-' + v).classList.toggle('hide', v !== view);
+    $('t-' + v).classList.toggle('on', v === view);
+  }
+  if (view === 'sessions') loadSessions();
+}
+$('t-live').onclick = () => show('live');
+$('t-sessions').onclick = () => show('sessions');
+$('t-analysis').onclick = () => show('analysis');
+
+/* ---------- IndexedDB ---------- */
+const DB = {
+  open() {
+    return this._p || (this._p = new Promise((res, rej) => {
+      const r = indexedDB.open('ecgh10', 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore('meta', { keyPath: 'id' }); r.result.createObjectStore('data', { keyPath: 'id' }); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    }));
+  },
+  async tx(stores, mode, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const t = db.transaction(stores, mode); const out = fn(t);
+      t.oncomplete = () => res(out.result !== undefined ? out.result : undefined); t.onerror = () => rej(t.error);
+    });
+  },
+  save(meta, data) { return this.tx(['meta', 'data'], 'readwrite', t => { t.objectStore('meta').put(meta); t.objectStore('data').put(data); return {}; }); },
+  async all() { const db = await this.open(); return new Promise(r => { const q = db.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => r(q.result); }); },
+  async get(id) { const db = await this.open(); return new Promise(r => { const q = db.transaction('data').objectStore('data').get(id); q.onsuccess = () => r(q.result); }); },
+  del(id) { return this.tx(['meta', 'data'], 'readwrite', t => { t.objectStore('meta').delete(id); t.objectStore('data').delete(id); return {}; }); }
+};
+
+/* ---------- Estado de streaming ---------- */
+const S = { src: null, device: null, ctrl: null, data: null, hrChar: null, connected: false, wake: null,
+  filt: DSP.createLiveFilter(FS, 50), ring: new Float32Array(FS * 8), ringN: 0, frames: 0, lastTs: null, lastN: 0,
+  rec: null, simTimer: null, reconnecting: false, wantStream: false, ctrlWait: null };
+
+function setStatus(t) { $('status').textContent = t; }
+function setStreaming(on) {
+  $('bRec').disabled = !on && !S.rec;
+  $('bDisc').disabled = !S.src;
+  $('bConnect').disabled = !!S.src; $('bSim').disabled = !!S.src;
+}
+
+/* ---------- Recepción de datos ---------- */
+function pushSamples(arr, tsNs) {
+  // detección de huecos con el timestamp del sensor (ns): delta entre tramas vs. duración esperada
+  if (S.lastTs !== null && tsNs !== null && S.rec) {
+    const delta = Number(tsNs - S.lastTs) / 1e6;
+    const lost = delta - arr.length / FS * 1000;
+    if (lost > 40) S.rec.gaps.push({ idx: S.rec.n, ms: lost, wall: Date.now() });
+  }
+  S.lastTs = tsNs; S.lastN = arr.length; S.frames++;
+  for (let i = 0; i < arr.length; i++) {
+    S.ring[S.ringN++ % S.ring.length] = S.filt.process(arr[i]);
+  }
+  const r = S.rec;
+  if (r) {
+    if (r.n + arr.length > r.samples.length) { const g = new Int32Array(r.samples.length * 2); g.set(r.samples); r.samples = g; }
+    r.samples.set(arr, r.n); r.n += arr.length;
+  }
+}
+
+function onPmd(ev) {
+  const dv = ev.target.value;
+  if (dv.byteLength < 13 || dv.getUint8(0) !== 0x00 || dv.getUint8(9) !== 0x00) return; // solo ECG, trama tipo 0
+  const ts = dv.getBigUint64(1, true);
+  const n = Math.floor((dv.byteLength - 10) / 3);
+  const arr = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = 10 + i * 3;
+    let v = dv.getUint8(o) | (dv.getUint8(o + 1) << 8) | (dv.getUint8(o + 2) << 16);
+    if (v & 0x800000) v -= 0x1000000;
+    arr[i] = v;
+  }
+  pushSamples(arr, ts);
+}
+
+function onHr(ev) {
+  const dv = ev.target.value, f = dv.getUint8(0);
+  let i = 1, hr;
+  if (f & 1) { hr = dv.getUint16(1, true); i = 3; } else { hr = dv.getUint8(1); i = 2; }
+  if (f & 0x08) i += 2;
+  $('hr').textContent = hr;
+  if (f & 0x10) {
+    while (i + 1 < dv.byteLength) {
+      const rr = dv.getUint16(i, true) / 1024 * 1000; i += 2;
+      $('rrv').textContent = Math.round(rr);
+      if (S.rec) S.rec.rrDevice.push([Math.round(performance.now() - S.rec.perf0), Math.round(rr)]);
+    }
+  }
+}
+
+function onCtrl(ev) {
+  const dv = ev.target.value;
+  if (dv.getUint8(0) === 0xF0 && S.ctrlWait && dv.getUint8(1) === S.ctrlWait.op) S.ctrlWait.res(dv.getUint8(3));
+}
+const waitCtrl = (op, ms = 4000) => new Promise((res, rej) => {
+  S.ctrlWait = { op, res: s => { clearTimeout(tm); res(s); } };
+  const tm = setTimeout(() => rej(new Error('Sin respuesta de la banda al iniciar ECG')), ms);
+});
+
+/* ---------- Bluetooth (H10) ---------- */
+async function startStreams() {
+  const server = await S.device.gatt.connect();
+  const pmd = await server.getPrimaryService(UUID.pmd);
+  S.ctrl = await pmd.getCharacteristic(UUID.ctrl);
+  S.data = await pmd.getCharacteristic(UUID.data);
+  S.ctrl.addEventListener('characteristicvaluechanged', onCtrl);
+  S.data.addEventListener('characteristicvaluechanged', onPmd);
+  await S.ctrl.startNotifications();
+  await S.data.startNotifications();
+  const w = waitCtrl(0x02);
+  await S.ctrl.writeValueWithResponse(ECG_START);
+  const status = await w;
+  if (status !== 0) throw new Error('La banda rechazó el inicio de ECG (código ' + status + ')');
+  try {
+    const hrs = await server.getPrimaryService('heart_rate');
+    S.hrChar = await hrs.getCharacteristic('heart_rate_measurement');
+    S.hrChar.addEventListener('characteristicvaluechanged', onHr);
+    await S.hrChar.startNotifications();
+  } catch (e) { console.warn('FC estándar no disponible', e); }
+  try {
+    const bs = await server.getPrimaryService('battery_service');
+    const bc = await bs.getCharacteristic('battery_level');
+    $('batt').textContent = (await bc.readValue()).getUint8(0) + '%';
+  } catch (e) { /* opcional */ }
+  S.lastTs = null; S.filt.reset();
+}
+
+async function connectH10() {
+  if (!navigator.bluetooth) { setStatus('Este navegador no soporta Web Bluetooth. Usa Chrome en Android.'); return; }
+  try {
+    setStatus('Buscando banda…');
+    S.device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Polar H10' }],
+      optionalServices: [UUID.pmd, 'heart_rate', 'battery_service']
+    });
+    S.src = 'h10'; S.wantStream = true; setStreaming(false);
+    S.device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('Conectando a ' + S.device.name + '…');
+    await startStreams();
+    S.connected = true; setStreaming(true);
+    setStatus('Conectado a ' + S.device.name + ' · transmitiendo ECG');
+  } catch (e) {
+    if (e.name === 'NotFoundError') setStatus('Sin conexión.'); else setStatus('Error: ' + e.message);
+    if (!S.rec) teardown();
+  }
+}
+
+async function onDisconnected() {
+  S.connected = false;
+  if (!S.wantStream || S.reconnecting) return;
+  S.reconnecting = true;
+  const discAt = Date.now();
+  for (let k = 1; S.wantStream && k <= 120; k++) {
+    setStatus('Conexión perdida. Reintentando (' + k + ')…' + (S.rec ? ' La grabación sigue abierta.' : ''));
+    try {
+      await new Promise(r => setTimeout(r, Math.min(1000 * k, 5000)));
+      if (!S.wantStream) break;
+      await startStreams();
+      S.connected = true; S.reconnecting = false;
+      // tiempo perdido estimado con reloj de pared (el timestamp del sensor se reinicia con la nueva sesión PMD)
+      if (S.rec) S.rec.gaps.push({ idx: S.rec.n, ms: Date.now() - discAt, wall: Date.now(), reconnect: true });
+      setStatus('Reconectado · transmitiendo ECG');
+      return;
+    } catch (e) { /* reintenta */ }
+  }
+  S.reconnecting = false;
+  if (S.wantStream) setStatus('No se pudo reconectar. Revisa la banda.');
+}
+
+function teardown() {
+  S.wantStream = false; S.connected = false;
+  try { if (S.device && S.device.gatt.connected) S.device.gatt.disconnect(); } catch (e) {}
+  clearInterval(S.simTimer); S.simTimer = null; S.src = null; S.device = null;
+  $('modeBadge').classList.add('hide');
+  setStreaming(false); setStatus('Sin conexión.');
+}
+
+async function disconnect() {
+  if (S.rec) await stopRec();
+  if (S.src === 'h10' && S.ctrl && S.device && S.device.gatt.connected) { try { await S.ctrl.writeValueWithResponse(ECG_STOP); } catch (e) {} }
+  teardown();
+}
+
+/* ---------- Simulador ---------- */
+function startSim() {
+  S.src = 'sim'; S.connected = true; S.wantStream = true; S.lastTs = null; S.filt.reset();
+  const synth = DSP.createSynth({ hr: 72, noise: 15, seed: Date.now() & 0xffff });
+  let tsNs = 0n;
+  S.simTimer = setInterval(() => {
+    const a = synth.next(65); tsNs += BigInt(Math.round(65 / FS * 1e9));
+    pushSamples(a, tsNs);
+  }, 500);
+  $('modeBadge').classList.remove('hide');
+  setStreaming(true); setStatus('SIMULADOR activo: señal sintética, no es tu ECG.');
+  // FC simulada para el panel
+  S.simHr = setInterval(() => { if (S.src !== 'sim') return clearInterval(S.simHr); $('hr').textContent = 70 + Math.round(Math.random() * 4); }, 1000);
+}
+
+/* ---------- Grabación ---------- */
+async function wakeLock(on) {
+  try {
+    if (on && navigator.wakeLock) S.wake = await navigator.wakeLock.request('screen');
+    else if (S.wake) { await S.wake.release(); S.wake = null; }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.rec) wakeLock(true); });
+
+function startRec() {
+  S.rec = { id: Date.now(), startedAt: Date.now(), perf0: performance.now(), samples: new Int32Array(FS * 600), n: 0,
+    gaps: [], events: [], rrDevice: [], simulated: S.src === 'sim', lastCk: Date.now() };
+  $('bRec').textContent = 'Detener y analizar'; $('bMark').disabled = false; $('bRec').disabled = false;
+  wakeLock(true);
+  $('recInfo').textContent = 'Grabando. Mantén la pantalla encendida y Chrome en primer plano: si el sistema suspende la página, la transmisión se corta.';
+}
+
+function recSnapshot(finished) {
+  const r = S.rec, n = r.n;
+  const meta = { id: r.id, startedAt: r.startedAt, n, durationS: n / FS, simulated: r.simulated, events: r.events.length, gaps: r.gaps.length, finished };
+  const data = { id: r.id, samples: r.samples.slice(0, n), gaps: r.gaps, events: r.events, rrDevice: r.rrDevice };
+  return [meta, data];
+}
+
+async function stopRec() {
+  const r = S.rec; if (!r) return;
+  const [meta, data] = recSnapshot(true);
+  S.rec = null; wakeLock(false);
+  $('bRec').textContent = 'Iniciar grabación'; $('bMark').disabled = true; $('recInfo').textContent = '';
+  $('bRec').disabled = !S.src;
+  await DB.save(meta, data);
+  if (meta.n < FS * 10) { $('recInfo').textContent = 'Grabación demasiado corta (<10 s); guardada pero sin análisis útil.'; }
+  openAnalysis(meta.id);
+}
+
+setInterval(() => {
+  const r = S.rec; if (!r) return;
+  $('timer').textContent = fmtT(r.n / FS);
+  if (Date.now() - r.lastCk > 30000) { r.lastCk = Date.now(); const [m, d] = recSnapshot(false); DB.save(m, d).catch(() => {}); }
+}, 500);
+
+$('bRec').onclick = () => S.rec ? stopRec() : startRec();
+$('bMark').onclick = () => {
+  if (!S.rec) return;
+  S.rec.events.push({ idx: S.rec.n, wall: Date.now(), label: 'síntoma' });
+  $('recInfo').textContent = 'Síntoma marcado a las ' + fmtClock(Date.now()) + ' (' + S.rec.events.length + ' en total).';
+  if (navigator.vibrate) navigator.vibrate(60);
+};
+$('bConnect').onclick = connectH10;
+$('bSim').onclick = startSim;
+$('bDisc').onclick = disconnect;
+
+/* ---------- Trazado en vivo ---------- */
+function setupCanvas(cv) {
+  if (!cv.dataset.h) cv.dataset.h = cv.getAttribute('height');
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = +cv.dataset.h;
+  cv.style.height = h + 'px';
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { g, w, h };
+}
+function drawGrid(g, w, h, secondsSpan, uvTop, uvBottom) {
+  g.clearRect(0, 0, w, h);
+  const xs = w / secondsSpan;
+  for (let t = 0; t <= secondsSpan; t += 0.04) {
+    g.strokeStyle = Math.abs(t / 0.2 - Math.round(t / 0.2)) < 1e-6 ? C.grid2 : C.grid; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(Math.round(t * xs) + .5, 0); g.lineTo(Math.round(t * xs) + .5, h); g.stroke();
+  }
+  const ys = h / (uvTop - uvBottom);
+  for (let v = Math.ceil(uvBottom / 100) * 100; v <= uvTop; v += 100) {
+    g.strokeStyle = v % 500 === 0 ? C.grid2 : C.grid;
+    const y = Math.round((uvTop - v) * ys) + .5;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+  }
+}
+function drawLive() {
+  const cv = $('live'), { g, w, h } = setupCanvas(cv);
+  const top = 1500, bot = -1000;
+  drawGrid(g, w, h, 8, top, bot);
+  const N = S.ring.length, have = Math.min(S.ringN, N);
+  g.strokeStyle = C.navy; g.lineWidth = 1.5; g.beginPath();
+  const ys = h / (top - bot);
+  for (let i = 0; i < have; i++) {
+    const v = S.ring[(S.ringN - have + i) % N];
+    const x = (N - have + i) / N * w, y = (top - Math.max(bot, Math.min(top, v))) * ys;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+  requestAnimationFrame(drawLive);
+}
+requestAnimationFrame(drawLive);
+
+/* ---------- Sesiones ---------- */
+async function loadSessions() {
+  const list = (await DB.all()).sort((a, b) => b.startedAt - a.startedAt);
+  const tb = $('sessTable').querySelector('tbody'); tb.innerHTML = '';
+  $('sessEmpty').classList.toggle('hide', list.length > 0);
+  for (const m of list) {
+    const tr = document.createElement('tr'); tr.className = 'click';
+    const notes = [m.simulated ? 'SIMULADA' : '', m.finished ? '' : 'interrumpida', m.events ? m.events + ' síntoma(s)' : '', m.gaps ? m.gaps + ' hueco(s)' : ''].filter(Boolean).join(' · ');
+    tr.innerHTML = `<td>${fmtDate(m.startedAt)}</td><td>${fmtT(m.durationS)}</td><td>${notes}</td>`;
+    tr.onclick = () => openAnalysis(m.id);
+    tb.appendChild(tr);
+  }
+}
+
+$('fImport').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rows = (await f.text()).split(/\r?\n/).slice(1).map(l => l.split(',')).filter(r => r.length >= 2 && r[1] !== '');
+  const samples = Int32Array.from(rows.map(r => Math.round(parseFloat(r[1]))));
+  const id = Date.now();
+  await DB.save({ id, startedAt: id, n: samples.length, durationS: samples.length / FS, simulated: false, events: 0, gaps: 0, finished: true, imported: f.name },
+    { id, samples, gaps: [], events: [], rrDevice: [] });
+  e.target.value = ''; loadSessions();
+};
+
+/* ---------- Análisis ---------- */
+const A = { id: null, meta: null, data: null, an: null, view: { i0: 0 }, yr: [-1000, 1500] };
+
+async function openAnalysis(id) {
+  $('t-analysis').classList.remove('hide'); show('analysis');
+  $('aWait').classList.remove('hide'); $('aBody').classList.add('hide');
+  const meta = (await DB.all()).find(m => m.id === id), data = await DB.get(id);
+  A.id = id; A.meta = meta; A.data = data;
+  $('aTitle').textContent = fmtDate(meta.startedAt) + ' · ' + fmtT(meta.durationS) + (meta.simulated ? ' · SIMULADA' : '');
+  await new Promise(r => setTimeout(r, 30));
+  if (data.samples.length < FS * 10) { $('aWait').textContent = 'Muy corta para analizar (mínimo 10 s).'; return; }
+  const an = DSP.analyze(data.samples, FS, data.gaps.filter(g => g.ms > 0));
+  A.an = an;
+  const lo = DSP.percentile(an.ecg, 0.001), hi = DSP.percentile(an.ecg, 0.999), pad = (hi - lo) * 0.15 || 100;
+  A.yr = [lo - pad, hi + pad];
+  renderSummary(); renderEvents(); renderTables(); setupViewer(); drawTacho(); drawPoinc();
+  $('aWait').classList.add('hide'); $('aBody').classList.remove('hide');
+  drawTrace();
+}
+
+function renderSummary() {
+  const m = A.an.metrics, an = A.an;
+  const card = (v, l) => `<div class="card"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  $('aCards').innerHTML = m ? [
+    card(num(m.meanHR), 'FC media (lpm)'), card(num(m.minHR) + ' – ' + num(m.maxHR), 'FC mín–máx (10 latidos)'),
+    card(num(m.sdnn), 'SDNN (ms)'), card(num(m.rmssd), 'RMSSD (ms)'), card(num(m.pnn50, 1) + '%', 'pNN50'),
+    card(m.flagged + ' (' + num(m.flaggedPct, 1) + '%)', 'Latidos corto/largo'), card(m.beats, 'Latidos válidos')
+  ].join('') : card('--', 'Sin latidos válidos suficientes');
+  $('aQuality').textContent = 'Señal utilizable: ' + num(an.validPct, 0) + '% · Huecos de conexión: ' + A.data.gaps.filter(g => g.ms > 0).length +
+    ' · Picos R detectados: ' + an.peaks.length;
+}
+
+function windowStats(tc, half) {
+  const bs = A.an.beats.filter(b => b.ok && Math.abs(b.t - tc) <= half);
+  if (bs.length < 3) return null;
+  const rr = bs.map(b => b.rr), m = DSP.mean(rr);
+  return { hr: 60000 / m, cv: DSP.sd(rr) / m };
+}
+function evTime(ev) { return A.an.timeOf(Math.min(ev.idx, A.data.samples.length - 1)); }
+
+function renderEvents() {
+  const tb = $('evTable').querySelector('tbody'); tb.innerHTML = '';
+  $('evEmpty').classList.toggle('hide', A.data.events.length > 0);
+  for (const ev of A.data.events) {
+    const t = evTime(ev), st = windowStats(t, 10), tr = document.createElement('tr'); tr.className = 'click';
+    tr.innerHTML = `<td>${fmtClock(ev.wall)} (${fmtT(t)})</td><td>${st ? num(st.hr) + ' lpm' : '--'}</td><td>${st ? num(st.cv, 3) : '--'}</td>`;
+    tr.onclick = () => jumpTo(ev.idx); tb.appendChild(tr);
+  }
+}
+
+function renderTables() {
+  const an = A.an;
+  const wt = $('winTable').querySelector('tbody'); wt.innerHTML = '';
+  [...an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5).forEach(w => {
+    const tr = document.createElement('tr'); tr.className = 'click';
+    tr.innerHTML = `<td>${fmtT(w.t0)}–${fmtT(w.t1)}</td><td>${num(w.meanHR)}</td><td>${num(w.cv, 3)}</td><td>${num(w.pct50, 0)}%</td>`;
+    tr.onclick = () => jumpTo(w.i0); wt.appendChild(tr);
+  });
+  const fl = an.beats.filter(b => b.flag);
+  $('flagInfo').textContent = fl.length ? `${fl.length} latidos con RR >20 % distinto de la mediana de sus vecinos. Primeros 100 (toca para ver el trazado).` : 'Ninguno.';
+  const ft = $('flagTable').querySelector('tbody'); ft.innerHTML = '';
+  fl.slice(0, 100).forEach(b => {
+    const tr = document.createElement('tr'); tr.className = 'click';
+    tr.innerHTML = `<td>${fmtT(b.t)}</td><td>${num(b.rr)} ms</td><td>${b.flag}</td>`;
+    tr.onclick = () => jumpTo(b.i); ft.appendChild(tr);
+  });
+}
+
+/* Visor de trazado */
+function viewLen() { return Math.round(+$('aWin').value * FS); }
+function setupViewer() {
+  const n = A.data.samples.length;
+  $('aPos').max = Math.max(0, n - viewLen()); $('aPos').value = 0; A.view.i0 = 0;
+}
+function jumpTo(i) {
+  A.view.i0 = Math.max(0, Math.min(A.data.samples.length - viewLen(), Math.round(i - viewLen() / 2)));
+  $('aPos').value = A.view.i0; drawTrace();
+  $('trace').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+$('aPos').oninput = e => { A.view.i0 = +e.target.value; drawTrace(); };
+$('aWin').onchange = () => { const c = A.view.i0 + viewLen() / 2; setupViewer(); jumpTo(c); };
+$('aPeaks').onchange = drawTrace;
+
+function drawTrace() {
+  if (!A.an) return;
+  const an = A.an, n = an.ecg.length, L = Math.min(viewLen(), n), i0 = Math.min(A.view.i0, n - L), i1 = i0 + L;
+  const cv = $('trace'), { g, w, h } = setupCanvas(cv), [lo, hi] = A.yr;
+  drawGrid(g, w, h, L / FS, hi, lo);
+  const xs = w / L, ys = h / (hi - lo);
+  for (const [a, b] of an.badRanges) {
+    if (b < i0 || a > i1) continue;
+    g.fillStyle = 'rgba(85,85,85,.12)'; g.fillRect((Math.max(a, i0) - i0) * xs, 0, (Math.min(b, i1) - Math.max(a, i0)) * xs, h);
+  }
+  g.strokeStyle = C.navy; g.lineWidth = 1.4; g.beginPath();
+  for (let i = i0; i < i1; i++) {
+    const x = (i - i0) * xs, y = (hi - Math.max(lo, Math.min(hi, an.ecg[i]))) * ys;
+    i === i0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.stroke();
+  // huecos de conexión
+  g.setLineDash([4, 4]); g.strokeStyle = C.gray;
+  for (const gp of A.data.gaps) if (gp.ms > 0 && gp.idx >= i0 && gp.idx <= i1) { const x = (gp.idx - i0) * xs; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+  g.setLineDash([]);
+  // síntomas
+  g.fillStyle = C.cyan; g.font = '12px system-ui';
+  for (const ev of A.data.events) if (ev.idx >= i0 && ev.idx <= i1) {
+    const x = (ev.idx - i0) * xs; g.fillRect(x - 1, 0, 3, h); g.fillText('síntoma', x + 5, 14);
+  }
+  if ($('aPeaks').checked) for (const b of an.beats) {
+    if (b.i < i0 || b.i >= i1) continue;
+    const x = (b.i - i0) * xs, y = (hi - an.ecg[b.i]) * ys;
+    g.beginPath(); g.arc(x, Math.max(6, y - 8), 4, 0, 7); g.fillStyle = b.flag ? C.navy : C.cyan; g.fill();
+    if (b.flag) { g.strokeStyle = C.cyan; g.lineWidth = 2; g.stroke(); g.fillStyle = C.navy; g.fillText(b.flag, x + 7, Math.max(16, y - 4)); }
+    if (b.rr) { g.fillStyle = C.gray; g.fillText(Math.round(b.rr), x - 12, h - 6); }
+  }
+  $('aPosInfo').textContent = `Desde ${fmtT(an.timeOf(i0))} · pico R: círculo; marcado corto/largo: círculo oscuro con anillo; sombreado gris: señal descartada por calidad; número inferior: RR en ms.`;
+}
+window.addEventListener('resize', () => { if (A.an) { drawTrace(); drawTacho(); drawPoinc(); } });
+
+function drawTacho() {
+  const { g, w, h } = setupCanvas($('tacho')), bs = A.an.beats.filter(b => b.ok);
+  g.clearRect(0, 0, w, h);
+  if (bs.length < 2) return;
+  const t0 = bs[0].t, t1 = bs[bs.length - 1].t, lo = 300, hi = Math.max(1200, ...bs.map(b => b.rr));
+  const X = t => 30 + (t - t0) / (t1 - t0 || 1) * (w - 40), Y = r => 10 + (hi - r) / (hi - lo) * (h - 30);
+  g.strokeStyle = C.grid2; g.fillStyle = C.gray; g.font = '11px system-ui';
+  for (let r = 400; r <= hi; r += 200) { g.beginPath(); g.moveTo(30, Y(r)); g.lineTo(w, Y(r)); g.stroke(); g.fillText(r, 2, Y(r) + 4); }
+  g.fillText(fmtT(t0), 30, h - 4); g.fillText(fmtT(t1), w - 40, h - 4);
+  for (const b of bs) {
+    g.beginPath(); g.arc(X(b.t), Y(b.rr), 2, 0, 7); g.fillStyle = C.navy; g.fill();
+    if (b.flag) { g.beginPath(); g.arc(X(b.t), Y(b.rr), 5, 0, 7); g.strokeStyle = C.cyan; g.lineWidth = 2; g.stroke(); }
+  }
+}
+function drawPoinc() {
+  const { g, w, h } = setupCanvas($('poinc')), bs = A.an.beats;
+  g.clearRect(0, 0, w, h);
+  const pts = []; for (let k = 1; k < bs.length; k++) if (bs[k].ok && bs[k - 1].ok) pts.push([bs[k - 1].rr, bs[k].rr]);
+  if (pts.length < 2) return;
+  const lo = 300, hi = Math.max(1200, ...pts.map(p => Math.max(p[0], p[1]))), s = Math.min(w, h) - 30;
+  const X = v => 30 + (v - lo) / (hi - lo) * s, Y = v => 5 + (hi - v) / (hi - lo) * s;
+  g.strokeStyle = C.grid2; g.beginPath(); g.moveTo(X(lo), Y(lo)); g.lineTo(X(hi), Y(hi)); g.stroke();
+  g.strokeRect(30, 5, s, s);
+  g.fillStyle = C.gray; g.font = '11px system-ui'; g.fillText('RR(n) ms →', 30, h - 4); g.fillText(hi | 0, 2, 14);
+  g.fillStyle = 'rgba(17,37,72,.55)';
+  for (const p of pts) { g.beginPath(); g.arc(X(p[0]), Y(p[1]), 2.2, 0, 7); g.fill(); }
+}
+
+/* ---------- Exportar ---------- */
+function download(name, text, type) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: type || 'text/csv' })); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+const base = () => 'ecg_' + new Date(A.meta.startedAt).toISOString().replace(/[:T]/g, '-').slice(0, 19) + (A.meta.simulated ? '_SIMULADA' : '');
+$('xRaw').onclick = () => {
+  const out = ['t_s,uV'], s = A.data.samples;
+  for (let i = 0; i < s.length; i++) out.push(A.an.timeOf(i).toFixed(4) + ',' + s[i]);
+  download(base() + '_senal.csv', out.join('\n'));
+};
+$('xBeats').onclick = () => {
+  const out = ['t_s,rr_ms,valido,marca']; for (const b of A.an.beats) out.push([b.t.toFixed(3), b.rr === null ? '' : b.rr.toFixed(1), b.ok ? 1 : 0, b.flag].join(','));
+  download(base() + '_latidos.csv', out.join('\n'));
+};
+$('xJson').onclick = () => download(base() + '_resumen.json', JSON.stringify({
+  inicio: new Date(A.meta.startedAt).toISOString(), duracion_s: A.meta.durationS, simulada: A.meta.simulated, fs: FS,
+  metricas: A.an.metrics, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
+  sintomas: A.data.events.map(e => ({ hora: new Date(e.wall).toISOString(), t_s: evTime(e), ...windowStats(evTime(e), 10) })),
+  ventanas_mas_irregulares: [...A.an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5),
+  umbrales: DSP.CFG, nota: 'Heurísticos no calibrados. Sin fines médicos.'
+}, null, 2), 'application/json');
+$('xPrint').onclick = () => window.print();
+$('xDel').onclick = async () => {
+  if (!confirm('¿Eliminar esta sesión de este teléfono? No se puede deshacer. Exporta antes si la necesitas.')) return;
+  await DB.del(A.id); A.an = null; $('t-analysis').classList.add('hide'); show('sessions');
+};
+
+setStreaming(false);
+if (!navigator.bluetooth) setStatus('Web Bluetooth no disponible: abre esta página en Chrome para Android (HTTPS o localhost). El simulador sí funciona.');
+</script>
+</body>
+</html>
