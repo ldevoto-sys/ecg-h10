@@ -105,6 +105,27 @@ test('polaridad: QRS negativo dominante no alterna entre R y S (RR estable)', ()
   assert.ok(a.metrics.sdnn < 40 && Math.abs(a.metrics.meanHR - 70) < 2, 'SDNN ' + a.metrics.sdnn + ' FC ' + a.metrics.meanHR);
 });
 
+test('ondas P: con P = coherentes, sin P = incoherentes, ritmo rápido = insuficiente', () => {
+  const run = o => DSP.analyze(gen(60, o), DSP.FS, []).pwave;
+  const con = run({ hr: 75, seed: 3, noise: 15 }), sin = run({ irregular: true, seed: 5, noise: 15 }), fast = run({ hr: 150, seed: 2 });
+  assert.strictEqual(con.level, 'coherentes', 'con P corr ' + con.corr);
+  assert.strictEqual(sin.level, 'incoherentes', 'sin P corr ' + sin.corr);
+  assert.strictEqual(fast.level, 'insuficiente');
+  assert.ok(con.template && con.template.length > 50);
+  assert.ok(con.corr > sin.corr + 0.5);
+});
+
+test('ondas P: polaridad invertida no cambia el resultado', () => {
+  const x = gen(60, { hr: 75, seed: 3, noise: 15 }).map(v => -v);
+  assert.strictEqual(DSP.analyze(x, DSP.FS, []).pwave.level, 'coherentes');
+});
+
+test('ondas P: con ruido alto no se declara "incoherentes" (indeterminado por ruido)', () => {
+  const p = DSP.analyze(gen(40, { hr: 75, seed: 3, noise: 150 }), DSP.FS, []).pwave;
+  assert.notStrictEqual(p.level, 'incoherentes');
+  assert.strictEqual(p.reason, 'ruido alto');
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;

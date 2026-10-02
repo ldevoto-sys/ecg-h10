@@ -17,6 +17,26 @@ Web Bluetooth exige HTTPS o `localhost`. Opciones:
 2. **Termux en el teléfono**: `pkg install python`, `python -m http.server 8000` en esta carpeta, abrir `http://localhost:8000`.
 3. **GitHub Pages** (recomendada): `https://ldevoto-sys.github.io/ecg-h10/`. Settings → Pages → Deploy from a branch → `main` → `/ (root)`. El código no contiene datos de salud; las grabaciones quedan en el teléfono.
 
+## Criterios de ritmo (provisionales, no diagnósticos)
+El informe resume tres indicadores y una frase combinada:
+1. **Irregularidad de intervalos**: CV de los RR en ventanas de 30 latidos (baja <0,10; alta >0,20).
+2. **Patrón de los RR**: alternante (largo-corto) o al azar, según la fracción de cambios de signo de las diferencias sucesivas y la autocorrelación de lag 1.
+3. **Ondas P**: coherencia de la ventana 300–40 ms antes del QRS entre latidos alineados en R (coherentes ≥0,70; incoherentes ≤0,40). Solo usa latidos con RR previo ≥500 ms. Con ruido alto (>30 µV RMS sobre 30 Hz) no se declara "incoherentes". Se muestra el latido promedio para revisarlo a ojo.
+
+Evidencia usada para los umbrales (3 informes de 30 s de otro dispositivo, digitalizados desde imagen y pasados a 130 Hz; etiquetas de clasificación automática):
+
+| Señal | CV | Patrón | Coherencia P |
+|---|---|---|---|
+| FA 30-jul | 0,31 | al azar | 0,29 |
+| FA 13-ago | 0,31 | al azar | 0,28 |
+| Latidos prematuros 1-sep | 0,24 | alternante | 0,76 |
+| Tramo sinusal regular (1-sep, 9–30 s) | 0,02 | — | 0,91 |
+| Sintético con P / sin P | 0,03 / 0,25 | — / al azar | 0,96 / 0,13 |
+
+Sensibilidad al ruido (sintético con P de 120 µV): coherencia 0,96 con ruido de 15 µV, 0,87 con 30, 0,66 con 60, 0,45 con 100, 0,29 con 150. Con la H10 real puede variar; recalibrar con grabaciones propias.
+
+Limitaciones: la ausencia de P no se puede medir con ritmo rápido (pocos latidos con RR ≥500 ms), un flutter también tiene ondas regulares, y los latidos prematuros repetidos bajan la coherencia (por eso se combina con el patrón de los RR). Las señales de referencia no se incluyen en el repo (datos personales).
+
 ## Pruebas
 - `node test/dsp.test.js`: procesamiento (picos R, FC, latido prematuro, huecos, calidad, ruido).
 - `NODE_PATH=$(npm root -g) node test/e2e.js`: Chromium real con banda simulada (protocolo PMD, reconexión, análisis, exportación).

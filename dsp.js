@@ -22,7 +22,11 @@
     // (2 con FA: CV 0,27–0,31; 1 con latidos prematuros: 0,23) frente a ritmo regular (0,025–0,056).
     irrLow: 0.10, irrHigh: 0.20,
     // Patrón de los RR: fracción de cambios de signo entre diferencias sucesivas (0,67 = al azar, 1 = alternante)
-    altMin: 0.80, lag1Max: -0.3
+    altMin: 0.80, lag1Max: -0.3,
+    // Ondas P (provisional): coherencia de la ventana pre-QRS entre latidos. Medida con 2 FA (0,28–0,29) y
+    // 1 tramo sinusal (0,91–0,95); ver README. Solo latidos con RR previo >= pRrMin.
+    pCohHigh: 0.70, pCohLow: 0.40, pMinBeats: 6, pRrMin: 500,
+    pNoiseMax: 30                   // µV RMS de ruido >30 Hz fuera del QRS: sobre esto no se declara 'incoherentes'
   };
 
   // ---------- Filtros ----------
@@ -166,6 +170,40 @@
     return out;
   }
 
+  // ---------- Ondas P: coherencia de la ventana pre-QRS ----------
+  // Alinea latidos en R, toma [-300, -40] ms, quita tendencia lineal y mide la correlación de cada latido con la
+  // plantilla de los demás (leave-one-out). Alta = ventana que se repite (compatible con onda P); baja = incoherente.
+  function pWave(ecg, beats, fs, cfg, noiseUv) {
+    const n = ecg.length, W0 = Math.round(0.30 * fs), W1 = Math.round(0.04 * fs), W2 = Math.round(0.45 * fs), L = W0 - W1;
+    const segs = [], ext = [];
+    for (const b of beats) {
+      if (!b.ok || b.rr < cfg.pRrMin || b.i - W0 < 0) continue;
+      const s = [];
+      for (let j = 0; j < L; j++) s.push(ecg[b.i - W0 + j]);
+      const m = mean(s), sl = (s[L - 1] - s[0]) / (L - 1);
+      segs.push(s.map((v, j) => v - m - sl * (j - (L - 1) / 2)));
+      if (b.i + W2 < n) {
+        const e = []; for (let j = -W0; j <= W2; j++) e.push(ecg[b.i + j] - m);
+        ext.push(e);
+      }
+    }
+    if (segs.length < cfg.pMinBeats) return { n: segs.length, level: 'insuficiente', corr: null, ratio: null, template: null };
+    const N = segs.length, tpl = segs[0].map((_, j) => mean(segs.map(q => q[j])));
+    const pp = Math.max(...tpl) - Math.min(...tpl);
+    const indiv = mean(segs.map(q => Math.max(...q) - Math.min(...q)));
+    const cs = segs.map((q, i) => {
+      const o = tpl.map((t, j) => (t * N - q[j]) / (N - 1)), ma = mean(q), mb = mean(o);
+      let nu = 0, da = 0, db = 0;
+      for (let j = 0; j < L; j++) { nu += (q[j] - ma) * (o[j] - mb); da += (q[j] - ma) ** 2; db += (o[j] - mb) ** 2; }
+      return da > 0 && db > 0 ? nu / Math.sqrt(da * db) : 0;
+    });
+    const corr = mean(cs);
+    let level = corr >= cfg.pCohHigh ? 'coherentes' : corr <= cfg.pCohLow ? 'incoherentes' : 'indeterminado', reason = null;
+    if (level === 'incoherentes' && noiseUv !== null && noiseUv > cfg.pNoiseMax) { level = 'indeterminado'; reason = 'ruido alto'; }
+    const template = ext.length ? ext[0].map((_, j) => mean(ext.map(e => e[j]))) : null;
+    return { n: N, level, reason, noiseUv, corr, ratio: indiv > 0 ? pp / indiv : null, tplPP: pp, template, t0: -W0 / fs, t1: W2 / fs, pStart: -W0 / fs, pEnd: -W1 / fs };
+  }
+
   // ---------- Análisis de sesión ----------
   // samples: µV a 130 Hz. gaps: [{idx, ms}] = ms perdidos justo antes del índice idx.
   function analyze(samples, fs, gaps, opts) {
@@ -196,6 +234,7 @@
     const bad = new Uint8Array(n);
     const peaks = [];
     const segOfPeak = [];
+    let hfSum = 0, hfN = 0; // ruido de alta frecuencia fuera del QRS
 
     segs.forEach(([a, b], sid) => {
       const sub = x.subarray(a, b);
@@ -209,6 +248,13 @@
       for (const p of detectR(sub, fs, e)) { peaks.push(a + p); segOfPeak.push(sid); }
       // calidad de señal por ventanas
       const hf = filtfilt([biquad('hp', 30, fs, Q)], sub);
+      {
+        const nearQrs = new Uint8Array(b - a), rr0 = Math.round(0.1 * fs);
+        for (let k = segOfPeak.length - 1; k >= 0 && segOfPeak[k] === sid; k--) {
+          const c = peaks[k] - a; nearQrs.fill(1, Math.max(0, c - rr0), Math.min(b - a, c + rr0 + 1));
+        }
+        for (let i = 0; i < b - a; i++) if (!nearQrs[i]) { hfSum += hf[i] * hf[i]; hfN++; }
+      }
       const w = Math.round(cfg.qualWinS * fs);
       for (let s = 0; s < b - a; s += w) {
         const t = Math.min(b - a, s + w);
@@ -343,9 +389,12 @@
       }
     }
 
+    const noiseUv = hfN ? Math.sqrt(hfSum / hfN) : null;
+    const pwave = metrics ? pWave(ecg, beats, fs, cfg, noiseUv) : null;
+
     const badSamples = bad.reduce((s, v) => s + v, 0);
     return {
-      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows, irregularity,
+      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows, irregularity, pwave, noiseUv,
       durationS: timeOf(n - 1) + 1 / fs,
       validPct: n ? 100 * (1 - badSamples / n) : 0
     };
