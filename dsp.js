@@ -23,6 +23,8 @@
     irrLow: 0.10, irrHigh: 0.20,
     // Patrón de los RR: fracción de cambios de signo entre diferencias sucesivas (0,67 = al azar, 1 = alternante)
     altMin: 0.80, lag1Max: -0.3,
+    // Resumen (provisional): calidad de señal = % de muestras utilizables
+    qualGood: 90, qualFair: 70, minBeatsSummary: 20, maxMarkedYellow: 5,
     // Ondas P (provisional): coherencia de la ventana pre-QRS entre latidos. Medida con 2 FA (0,28–0,29) y
     // 1 tramo sinusal (0,91–0,95); ver README. Solo latidos con RR previo >= pRrMin.
     pCohHigh: 0.70, pCohLow: 0.40, pMinBeats: 6, pRrMin: 500,
@@ -453,5 +455,46 @@
     };
   }
 
-  return { FS, CFG, biquad, filtfilt, ecgFilter, createLiveFilter, detectR, analyze, createSynth, percentile, mean, sd, median };
+  // ---------- Resumen para el informe: estado (verde/amarillo/rojo/gris), campos y conclusión ----------
+  // Umbrales provisionales, sin validar con la H10.
+  function resumen(an, cfg) {
+    const lcfirst = t => t[0].toLowerCase() + t.slice(1);
+    cfg = Object.assign({}, CFG, cfg || {});
+    const m = an.metrics, ir = an.irregularity, pw = an.pwave;
+    const mmss = t => { t = Math.round(t); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+    const q = an.validPct, calidadNivel = q >= cfg.qualGood ? 'Buena' : q >= cfg.qualFair ? 'Regular' : 'Baja';
+    const base = { calidad: calidadNivel + ' (' + Math.round(q) + ' %)', calidadNivel };
+    if (!m || !ir || !pw) {
+      return Object.assign(base, { estado: 'gris', ritmo: 'No concluyente', fc: m ? Math.round(m.meanHR) : null, marcados: '--', vfc: null,
+        conclusion: 'No concluyente: señal insuficiente o muy pocos latidos válidos.' });
+    }
+    const fl = an.beats.filter(b => b.flag);
+    const marcados = !fl.length ? '0' : fl.length > 3 ? String(fl.length) :
+      fl.length + ' (' + fl.map(b => b.flag + ' a ' + mmss(b.t)).join(', ') + ')';
+    const vfcVal = m.flagged > 0 && m.nnValid ? m.rmssdNN : m.rmssd;
+    const out = Object.assign(base, { fc: Math.round(m.meanHR), marcados, vfc: vfcVal === null ? null : Math.round(vfcVal), vfcSinMarcados: m.flagged > 0 && m.nnValid });
+    const pRaro = pw.level === 'incoherentes', pOk = pw.level === 'coherentes';
+    if (q < cfg.qualFair || m.beats < cfg.minBeatsSummary) {
+      return Object.assign(out, { estado: 'gris', ritmo: 'No concluyente',
+        conclusion: 'No concluyente: ' + (q < cfg.qualFair ? 'señal con mucho ruido o artefactos.' : 'muy pocos latidos válidos.') });
+    }
+    if (ir.level === 'alta' || fl.length > cfg.maxMarkedYellow || (pRaro && ir.level !== 'baja')) {
+      const ritmo = ir.pattern === 'al azar' && pRaro ? 'Irregular, patrón compatible con FA' :
+        ir.pattern === 'alternante' ? 'Irregular alternante (compatible con latidos prematuros repetidos)' : 'Irregular';
+      return Object.assign(out, { estado: 'rojo', ritmo, conclusion: 'Se detectaron hallazgos que requieren revisión del trazado: ' + lcfirst(ritmo) + '.' });
+    }
+    if (fl.length > 0 || ir.level === 'intermedia' || pRaro) {
+      const ritmo = fl.length > 0 && ir.level === 'baja' && pOk ? 'Normal, con latidos marcados' :
+        pRaro ? 'Regular, sin ondas P claras' : 'Irregularidad intermedia';
+      return Object.assign(out, { estado: 'amarillo', ritmo, conclusion: 'Se detectaron hallazgos que requieren revisión del trazado: ' +
+        (fl.length ? fl.length + ' latido' + (fl.length === 1 ? '' : 's') + ' marcado' + (fl.length === 1 ? '' : 's') + ' (' + fl.slice(0, 3).map(b => b.flag + ' a ' + mmss(b.t)).join(', ') + ')' : lcfirst(ritmo)) + '.' });
+    }
+    if (ir.level === 'baja' && pOk) {
+      return Object.assign(out, { estado: 'verde', ritmo: 'Normal', conclusion: 'Ritmo normal, sin latidos marcados y con buena calidad de señal.' });
+    }
+    return Object.assign(out, { estado: 'gris', ritmo: 'No concluyente',
+      conclusion: 'No concluyente: ondas P no evaluables (' + (pw.level === 'insuficiente' ? 'ritmo rápido o pocos latidos con intervalo previo largo' : pw.reason || 'indeterminadas') + '); intervalos regulares.' });
+  }
+
+  return { FS, CFG, resumen, biquad, filtfilt, ecgFilter, createLiveFilter, detectR, analyze, createSynth, percentile, mean, sd, median };
 });

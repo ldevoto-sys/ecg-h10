@@ -40,7 +40,18 @@
   footer { padding:16px; text-align:center; font-size:12px; color:var(--gray); }
   #status { font-weight:600; }
   .note { border-left:4px solid var(--cyan); padding:6px 12px; margin:10px 0; font-size:14px; color:var(--navy); background:var(--grid); }
-  @media print { header,nav,.row,input[type=range],footer { display:none !important; } main { max-width:none; } h2 { break-after:avoid; }
+  .resumen { border:1px solid var(--line); border-left:8px solid var(--gray); border-radius:8px; padding:12px 14px; margin:8px 0 14px; }
+  .resumen .hd { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:700; letter-spacing:.05em; }
+  .resumen dl { display:grid; grid-template-columns:max-content 1fr; gap:5px 16px; margin:10px 0 6px; }
+  .resumen dt { color:var(--gray); } .resumen dd { margin:0; font-weight:700; }
+  .resumen .fine { font-size:12px; color:var(--gray); margin:6px 0 0; }
+  .pill { padding:3px 12px; border-radius:14px; font-weight:700; font-size:14px; color:#fff; background:var(--gray); white-space:nowrap; }
+  .e-verde { border-left-color:#1E8E3E !important; } .pill.verde { background:#1E8E3E; }
+  .e-amarillo { border-left-color:#F2A900 !important; } .pill.amarillo { background:#F2A900; color:var(--navy); }
+  .e-rojo { border-left-color:#C62828 !important; } .pill.rojo { background:#C62828; }
+  .e-gris { border-left-color:var(--gray) !important; } .pill.gris { background:var(--gray); }
+  .resumen,.pill { print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+  @media print { header,nav,.row,input[type=range],footer,.noprint { display:none !important; } main { max-width:none; } h2 { break-after:avoid; }
     canvas { width:100% !important; height:auto !important; } .card,canvas,table,.note { break-inside:avoid; } }
 </style>
 </head>
@@ -90,10 +101,9 @@
   <h2 id="aTitle"></h2>
   <p class="muted" id="aWait">Analizando…</p>
   <div id="aBody" class="hide">
+    <div id="aResumen" class="resumen"></div>
     <div class="cards" id="aCards"></div>
     <p class="muted" id="aQuality"></p>
-    <p class="muted" id="aVfcNote"></p>
-    <div class="note" id="aIrrNote"></div>
     <h2>Trazado</h2>
     <div class="row">
       <label class="muted">Ventana
@@ -122,7 +132,7 @@
     <h2>Latidos marcados corto/largo</h2>
     <p class="muted" id="flagInfo"></p>
     <table id="flagTable"><thead><tr><th>Hora</th><th>RR</th><th>Tipo</th></tr></thead><tbody></tbody></table>
-    <h2>Exportar</h2>
+    <h2 class="noprint">Exportar</h2>
     <div class="row">
       <button class="b alt" id="xRaw">CSV señal</button>
       <button class="b alt" id="xBeats">CSV latidos</button>
@@ -130,7 +140,6 @@
       <button class="b alt" id="xPrint">Informe / PDF</button>
       <button class="b alt" id="xDel">Eliminar sesión</button>
     </div>
-    <div class="note">Los umbrales de calidad de señal y de marcado corto/largo (±20 % de la mediana local) son heurísticos y no están calibrados. Revisa siempre el trazado antes de confiar en una marca. Esta herramienta no diagnostica ni reemplaza a un médico ni a un examen.</div>
   </div>
 </section>
 </main>
@@ -514,8 +523,8 @@ function renderSummary() {
     m.flagged > 0 && m.nnValid
       ? card(num(m.rmssdNN), `VFC · RMSSD sin latidos marcados (ms) · ${m.nnExcluded} intervalos excluidos`) + card(num(m.rmssd), 'RMSSD con todos los latidos (ms)')
       : card(num(m.rmssd), 'VFC · RMSSD (ms)' + (m.flagged > 0 ? ' · demasiados latidos marcados para excluirlos' : '')),
-    an.pwave ? card(an.pwave.level[0].toUpperCase() + an.pwave.level.slice(1), 'Ondas P (provisional)' + (an.pwave.corr !== null ? ' · coherencia ' + num(an.pwave.corr, 2) : '') + (an.pwave.reason ? ' · ' + an.pwave.reason : ''), undefined, 'txt') : '',
-    an.irregularity ? card(an.irregularity.level[0].toUpperCase() + an.irregularity.level.slice(1), 'Irregularidad de intervalos (provisional) · CV ' + num(an.irregularity.cv, 2), undefined, 'txt') : '',
+    an.pwave ? card(an.pwave.level[0].toUpperCase() + an.pwave.level.slice(1), 'Ondas P' + (an.pwave.corr !== null ? ' · coherencia ' + num(an.pwave.corr, 2) : '') + (an.pwave.reason ? ' · ' + an.pwave.reason : ''), undefined, 'txt') : '',
+    an.irregularity ? card(an.irregularity.level[0].toUpperCase() + an.irregularity.level.slice(1), 'Irregularidad de intervalos · CV ' + num(an.irregularity.cv, 2), undefined, 'txt') : '',
     card(num(m.meanHR), 'FC media (lpm)'),
     card(num(m.maxHR), 'FC máx (10 latidos) · ' + pos(m.maxHRpos) + ' · toca para ver', m.maxHRpos && m.maxHRpos.i),
     card(num(m.minHR), 'FC mín (10 latidos) · ' + pos(m.minHRpos) + ' · toca para ver', m.minHRpos && m.minHRpos.i),
@@ -527,26 +536,23 @@ function renderSummary() {
   $('aCards').querySelectorAll('[data-i]').forEach(c => c.onclick = () => jumpTo(+c.dataset.i));
   $('aQuality').textContent = 'Señal utilizable: ' + num(an.validPct, 0) + '% · Huecos de conexión: ' + A.data.gaps.filter(g => g.ms > 0).length +
     ' · Picos R detectados: ' + an.peaks.length + (A.data.battery != null ? ' · Batería de la banda al conectar: ' + A.data.battery + '%' : '');
-  const ir = an.irregularity, pw = an.pwave, PAT = {
-    'alternante': 'intervalos que alternan largo-corto, descrito en latidos prematuros que se repiten cada dos latidos',
-    'al azar': 'intervalos que varían sin orden, descrito en ritmos irregularmente irregulares como la fibrilación auricular' };
-  let head;
-  if (!ir || !pw) head = 'Datos insuficientes para el resumen de ritmo.';
-  else if (ir.level === 'alta' && ir.pattern === 'al azar' && pw.level === 'incoherentes') head = 'Intervalos irregulares al azar y sin ondas P coherentes: patrón compatible con fibrilación auricular.';
-  else if (ir.level !== 'baja' && ir.pattern === 'al azar' && pw.level === 'coherentes') head = 'Intervalos irregulares al azar, pero con ondas P coherentes: no cumple el patrón de fibrilación auricular según estos criterios.';
-  else if (ir.level === 'alta' && ir.pattern === 'alternante') head = 'Intervalos alternantes largo-corto: patrón compatible con latidos prematuros repetidos (por ejemplo, un latido prematuro cada dos latidos).';
-  else if (ir.level === 'baja' && pw.level === 'coherentes') head = 'Intervalos regulares con ondas P coherentes.';
-  else head = `Criterios no concluyentes (irregularidad ${ir ? ir.level : '--'}, patrón ${ir && ir.pattern || '--'}, ondas P ${pw ? pw.level : '--'}). Revisa el trazado y el latido promedio.`;
-  const pDet = !pw ? '' : pw.level === 'insuficiente' ? ` Ondas P: menos de ${DSP.CFG.pMinBeats} latidos con intervalo previo ≥ ${DSP.CFG.pRrMin} ms (típico con ritmo rápido); no se pueden evaluar.` :
-    ` Ondas P ${pw.level} (coherencia ${num(pw.corr, 2)}, ${pw.n} latidos${pw.reason ? ', ' + pw.reason + ': ' + num(pw.noiseUv, 0) + ' µV' : ''}).`;
-  const fl = an.beats.filter(b => b.flag), nextRR = b => { const k = an.beats.indexOf(b), n = an.beats[k + 1]; return n && n.rr ? Math.round(n.rr) : null; };
-  const flagTxt = !fl.length ? '' : fl.length > 5 ? ` ${fl.length} latidos marcados corto/largo.` :
-    ' Latidos marcados: ' + fl.map(b => `1 ${b.flag} a ${fmtT(b.t)} (RR ${Math.round(b.rr)} ms${b.flag === 'corto' && nextRR(b) ? `; el siguiente ${nextRR(b)} ms` : ''})`).join('; ') + '. Revisa el trazado en esos puntos.';
-  $('aIrrNote').textContent = head + flagTxt + ' ' + (!ir ? 'Irregularidad: muy pocos latidos válidos.' :
-    (ir.level === 'baja' ? `Intervalos regulares (CV ${num(ir.cv, 3)}, ${ir.source}).` :
-     `Irregularidad ${ir.level} (CV ${num(ir.cv, 3)}, ${ir.source})` + (ir.pattern ? `. Patrón ${ir.pattern}: ${PAT[ir.pattern]}.` : '.'))) + pDet +
-    ' Indicadores provisionales: umbrales elegidos con 3 grabaciones de 30 s de otro dispositivo, sin validar con la H10. No diagnostican, no reemplazan a un médico, y que no marquen nada no descarta una arritmia.';
-  $('aVfcNote').textContent = 'VFC: Garmin muestra el promedio nocturno del RMSSD en ventanas de 5 min, medido durmiendo. Una grabación de 30–60 s despierto mide lo mismo (RMSSD) pero no es comparable de forma directa. Con latidos prematuros o ritmo irregular el RMSSD sube, así que en esos tramos no refleja recuperación.';
+  renderResumen();
+}
+
+const ESTADO = { verde: ['●', 'NORMAL'], amarillo: ['▲', 'REVISAR'], rojo: ['■', 'IRREGULAR'], gris: ['○', 'SIN DATOS'] };
+function renderResumen() {
+  const r = DSP.resumen(A.an);
+  A.resumen = r;
+  const [sym, txt] = ESTADO[r.estado];
+  $('aResumen').className = 'resumen e-' + r.estado;
+  $('aResumen').innerHTML = `<div class="hd"><span>RESUMEN RÁPIDO</span><span class="pill ${r.estado}">${sym} ${txt}</span></div>
+    <dl><dt>Ritmo</dt><dd>${r.ritmo}</dd>
+    <dt>Frecuencia media</dt><dd>${r.fc === null ? '--' : r.fc + ' lpm'}</dd>
+    <dt>Latidos marcados</dt><dd>${r.marcados}</dd>
+    <dt>Calidad de señal</dt><dd>${r.calidad}</dd>
+    <dt>VFC (RMSSD)</dt><dd>${r.vfc === null ? '--' : r.vfc + ' ms'}${r.vfcSinMarcados ? ' <span class="muted" style="font-weight:400">sin latidos marcados</span>' : ''}</dd>
+    <dt>Conclusión</dt><dd>${r.conclusion}</dd></dl>
+    <p class="fine">Indicadores experimentales, umbrales preliminares. No diagnostica ni reemplaza la evaluación médica.</p>`;
 }
 
 function windowStats(tc, half) {
@@ -715,7 +721,7 @@ $('xBeats').onclick = () => {
 };
 $('xJson').onclick = () => download(base() + '_resumen.json', JSON.stringify({
   inicio: new Date(A.meta.startedAt).toISOString(), duracion_s: A.meta.durationS, simulada: A.meta.simulated, fs: FS,
-  metricas: A.an.metrics, irregularidad: A.an.irregularity, ondas_p: A.an.pwave && { ...A.an.pwave, template: undefined }, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
+  resumen: A.resumen, metricas: A.an.metrics, irregularidad: A.an.irregularity, ondas_p: A.an.pwave && { ...A.an.pwave, template: undefined }, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
   sintomas: A.data.events.map(e => ({ hora: new Date(e.wall).toISOString(), t_s: evTime(e), ...windowStats(evTime(e), 10) })),
   ventanas_mas_irregulares: [...A.an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5),
   umbrales: DSP.CFG, nota: 'Heurísticos no calibrados. Sin fines médicos.'

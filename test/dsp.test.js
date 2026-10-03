@@ -142,6 +142,28 @@ test('VFC sin latidos marcados: con ritmo irregular (muchos marcados) no se calc
   assert.strictEqual(m.nnValid, false); assert.strictEqual(m.rmssdNN, null);
 });
 
+test('resumen: estados verde / amarillo / rojo / gris', () => {
+  const R = o => { const a = DSP.analyze(gen(60, o), DSP.FS, []); return DSP.resumen(a); };
+  const verde = R({ hr: 75, seed: 3, noise: 15 });
+  assert.strictEqual(verde.estado, 'verde'); assert.strictEqual(verde.ritmo, 'Normal'); assert.strictEqual(verde.marcados, '0');
+  assert.ok(verde.conclusion.startsWith('Ritmo normal')); assert.ok(verde.fc >= 73 && verde.fc <= 77);
+  // caso real observado: ritmo estable con un latido adelantado y pausa
+  const amar = R({ rrSeq: k => (k === 20 ? 0.592 : k === 21 ? 0.945 : 0.81 + 0.008 * Math.sin(k * 1.7)), seed: 4, noise: 10 });
+  assert.strictEqual(amar.estado, 'amarillo'); assert.ok(amar.marcados.startsWith('1 (corto'), amar.marcados);
+  assert.ok(amar.conclusion.includes('requieren revisión')); assert.ok(amar.vfc < 15, 'VFC sin marcados ' + amar.vfc); assert.ok(amar.vfcSinMarcados);
+  const fa = R({ irregular: true, seed: 5, noise: 15 });
+  assert.strictEqual(fa.estado, 'rojo'); assert.ok(fa.ritmo.includes('compatible con FA'), fa.ritmo);
+  assert.ok(fa.conclusion.includes('compatible con FA'), fa.conclusion);
+  const big = R({ rrSeq: k => (k % 2 ? 1.0 : 0.5), seed: 6 });
+  assert.strictEqual(big.estado, 'rojo'); assert.ok(big.ritmo.includes('alternante'));
+  const ruido = R({ hr: 75, seed: 3, noise: 600 });
+  assert.strictEqual(ruido.estado, 'gris'); assert.ok(ruido.conclusion.startsWith('No concluyente'));
+  const rapido = R({ hr: 150, seed: 2 });
+  assert.strictEqual(rapido.estado, 'gris', 'ritmo rápido regular: ' + rapido.estado);
+  const plana = DSP.resumen(DSP.analyze(new Int32Array(60 * 130).fill(5), DSP.FS, []));
+  assert.strictEqual(plana.estado, 'gris');
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;
