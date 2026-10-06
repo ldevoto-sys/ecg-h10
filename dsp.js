@@ -25,6 +25,10 @@
     altMin: 0.80, lag1Max: -0.3,
     // Resumen (provisional): calidad de señal = % de muestras utilizables
     qualGood: 90, qualFair: 70, minBeatsSummary: 20, maxMarkedYellow: 5,
+    // Clasificación de latidos prematuros (provisional): correlación del QRS (±100 ms) con la plantilla de latidos normales
+    ectHalfMs: 100, ectShift: 2, ectCorrDistinct: 0.65, ectCorrSimilar: 0.80, ectMinNormals: 8, ectTemplateMin: 0.85, ectMaxMarkedFrac: 0.30,
+    // razón de amplitud del QRS (pico a pico) vs latidos normales: fuera de [Lo, Hi] = distinta; dentro de [SimLo, SimHi] = similar
+    ectAmpDistinctLo: 0.70, ectAmpDistinctHi: 1.45, ectAmpSimLo: 0.85, ectAmpSimHi: 1.20,
     // Ondas P (provisional): coherencia de la ventana pre-QRS entre latidos. Medida con 2 FA (0,28–0,29) y
     // 1 tramo sinusal (0,91–0,95); ver README. Solo latidos con RR previo >= pRrMin.
     pCohHigh: 0.70, pCohLow: 0.40, pMinBeats: 6, pRrMin: 500,
@@ -143,7 +147,7 @@
       while (cand[lo] < cand[j] - win) lo++;
       while (hi < cand.length && cand[hi] <= cand[j] + win) hi++;
       const ref = percentile(amp.slice(lo, hi), 0.75);
-      if (amp[j] >= 0.35 * ref) keep.push(cand[j]);
+      if (amp[j] >= 0.12 * ref) keep.push(cand[j]);
     }
     // Refinar sobre la señal filtrada 0.5–40 Hz, con polaridad dominante del QRS
     // (evita alternar entre R y S, que desplaza el latido 20–30 ms y ensucia RMSSD/CV)
@@ -204,6 +208,74 @@
     if (level === 'incoherentes' && noiseUv !== null && noiseUv > cfg.pNoiseMax) { level = 'indeterminado'; reason = 'ruido alto'; }
     const template = ext.length ? ext[0].map((_, j) => mean(ext.map(e => e[j]))) : null;
     return { n: N, level, reason, noiseUv, corr, ratio: indiv > 0 ? pp / indiv : null, tplPP: pp, template, t0: -W0 / fs, t1: W2 / fs, pStart: -W0 / fs, pEnd: -W1 / fs };
+  }
+
+  // ---------- Latidos prematuros: morfología del QRS vs plantilla de latidos normales ----------
+  // Solo sobre latidos marcados 'corto'. Correlación de Pearson en [-100, +100] ms alrededor de la R, con desfase
+  // de hasta ±2 muestras, y razón de amplitud pico a pico. PVC: correlación <0,65 o amplitud muy distinta; PAC: correlación
+  // >=0,80 y amplitud similar; en medio -> 'indeterminado'.
+  // No evalúa la onda P propia del latido ni el ancho del QRS (a 130 Hz el ancho medido es muy ruidoso).
+  function pearson(a, b) {
+    const n = a.length; let ma = 0, mb = 0;
+    for (let i = 0; i < n; i++) { ma += a[i]; mb += b[i]; }
+    ma /= n; mb /= n;
+    let nu = 0, da = 0, db = 0;
+    for (let i = 0; i < n; i++) { nu += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; }
+    return da > 0 && db > 0 ? nu / Math.sqrt(da * db) : 0;
+  }
+  function beatWindow(ecg, i, half, shift) {
+    const a = i - half + shift;
+    if (a < 0 || a + 2 * half >= ecg.length) return null;
+    return ecg.subarray(a, a + 2 * half + 1);
+  }
+  function bestCorr(ecg, i, tpl, half, maxShift) {
+    let best = null;
+    for (let sh = -maxShift; sh <= maxShift; sh++) {
+      const w = beatWindow(ecg, i, half, sh);
+      if (!w) continue;
+      const c = pearson(w, tpl);
+      if (best === null || c > best) best = c;
+    }
+    return best;
+  }
+  function ppAmp(w) { let mx = -Infinity, mn = Infinity; for (let i = 0; i < w.length; i++) { if (w[i] > mx) mx = w[i]; if (w[i] < mn) mn = w[i]; } return mx - mn; }
+  function classifyEctopics(ecg, beats, fs, cfg) {
+    const out = { pvc: 0, pac: 0, indet: 0, applicable: false, templateOk: false, templateN: 0, templateCorr: null };
+    const marked = beats.filter(b => b.flag === 'corto').length, oks = beats.filter(b => b.ok).length;
+    if (!marked || !oks || marked + beats.filter(b => b.flag === 'largo').length > cfg.ectMaxMarkedFrac * oks) return out;
+    out.applicable = true;
+    const half = Math.round(cfg.ectHalfMs / 1000 * fs), L = 2 * half + 1;
+    // latidos normales: válidos, sin marca, ni el siguiente a un marcado, intervalo previo >= 500 ms
+    const normals = beats.filter((b, k) => b.ok && !b.flag && b.rr >= 500 && !(k > 0 && beats[k - 1].flag) && beatWindow(ecg, b.i, half, 0));
+    if (normals.length < cfg.ectMinNormals) return out;
+    let tpl = new Float64Array(L);
+    for (const b of normals) { const w = beatWindow(ecg, b.i, half, 0); for (let j = 0; j < L; j++) tpl[j] += w[j] / normals.length; }
+    // un segundo paso re-alinea cada latido normal contra la plantilla (desfase ±shift) y la recalcula
+    for (let pass = 0; pass < 2; pass++) {
+      const next = new Float64Array(L); let n = 0;
+      for (const b of normals) {
+        let best = null, bw = null;
+        for (let sh = -cfg.ectShift; sh <= cfg.ectShift; sh++) { const w = beatWindow(ecg, b.i, half, sh); if (!w) continue; const c = pearson(w, tpl); if (best === null || c > best) { best = c; bw = w; } }
+        if (bw) { for (let j = 0; j < L; j++) next[j] += bw[j]; n++; }
+      }
+      for (let j = 0; j < L; j++) next[j] /= n; tpl = next;
+    }
+    const cn = normals.map(b => bestCorr(ecg, b.i, tpl, half, cfg.ectShift)).filter(c => c !== null);
+    out.templateN = normals.length; out.templateCorr = median(cn);
+    out.templateOk = out.templateCorr >= cfg.ectTemplateMin;
+    const refAmp = median(normals.map(b => ppAmp(beatWindow(ecg, b.i, half, 0))));
+    for (const b of beats) {
+      if (b.flag !== 'corto') continue;
+      const c = out.templateOk ? bestCorr(ecg, b.i, tpl, half, cfg.ectShift) : null;
+      const w0 = beatWindow(ecg, b.i, half, 0), ratio = w0 && refAmp > 0 ? ppAmp(w0) / refAmp : null;
+      b.corr = c; b.ampRatio = ratio;
+      if (c === null || ratio === null) b.ectopic = 'indeterminado';
+      else if (c < cfg.ectCorrDistinct || ratio < cfg.ectAmpDistinctLo || ratio > cfg.ectAmpDistinctHi) b.ectopic = 'PVC';
+      else if (c >= cfg.ectCorrSimilar && ratio >= cfg.ectAmpSimLo && ratio <= cfg.ectAmpSimHi) b.ectopic = 'PAC';
+      else b.ectopic = 'indeterminado';
+      if (b.ectopic === 'PVC') out.pvc++; else if (b.ectopic === 'PAC') out.pac++; else out.indet++;
+    }
+    return out;
   }
 
   // ---------- Análisis de sesión ----------
@@ -408,10 +480,11 @@
 
     const noiseUv = hfN ? Math.sqrt(hfSum / hfN) : null;
     const pwave = metrics ? pWave(ecg, beats, fs, cfg, noiseUv) : null;
+    const ectopics = metrics ? classifyEctopics(ecg, beats, fs, cfg) : null;
 
     const badSamples = bad.reduce((s, v) => s + v, 0);
     return {
-      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows, irregularity, pwave, noiseUv,
+      ecg, peaks, beats, bad, badRanges, segs, timeOf, metrics, windows, irregularity, pwave, noiseUv, ectopics,
       durationS: timeOf(n - 1) + 1 / fs,
       validPct: n ? 100 * (1 - badSamples / n) : 0
     };
@@ -427,7 +500,7 @@
     };
   }
 
-  // opts: hr (lpm), irregular (RR aleatorio, sin onda P), rrSeq(k)->seg, noise (µV RMS), seed
+  // opts: hr (lpm), irregular (RR aleatorio, sin onda P), rrSeq(k)->seg, beatType(k)->'normal'|'pvc'|'pac', noise (µV RMS), seed
   function createSynth(opts) {
     opts = opts || {};
     const hr = opts.hr || 70, noise = opts.noise === undefined ? 15 : opts.noise;
@@ -436,18 +509,23 @@
     const pAmp = opts.irregular ? 0 : 120;
     let k = 0;
     const nextRR = () => opts.rrSeq ? opts.rrSeq(k++) : opts.irregular ? 0.45 + 0.65 * rnd() : (60 / hr) * (1 + 0.03 * gauss());
-    let t = 0, nextBeat = 0.4, beats = [];
+    let t = 0, nextBeat = 0.4, beats = [], bi = 0;
     const g = (x, mu, s, a) => a * Math.exp(-0.5 * ((x - mu) / s) * ((x - mu) / s));
     const tpl = tau => g(tau, -0.16, 0.025, pAmp) + g(tau, -0.025, 0.010, -100) + g(tau, 0, 0.012, 1000) +
       g(tau, 0.025, 0.010, -200) + g(tau, 0.25, 0.045, 300);
+    // tipos: 'pvc' = QRS ancho, sin P, T invertida; 'pac' = QRS igual al normal con P distinta
+    const tplPvc = tau => g(tau, 0, 0.035, 1100) + g(tau, 0.07, 0.04, -500) + g(tau, 0.30, 0.06, -450);
+    const tplPac = tau => g(tau, -0.11, 0.022, 70) + g(tau, -0.025, 0.010, -100) + g(tau, 0, 0.012, 1000) +
+      g(tau, 0.025, 0.010, -200) + g(tau, 0.25, 0.045, 300);
+    const tplOf = ty => ty === 'pvc' ? tplPvc : ty === 'pac' ? tplPac : (typeof ty === 'string' && ty[0] === 'x') ? (tau => parseFloat(ty.slice(1)) * tpl(tau)) : tpl;
     return {
       next(count) {
         const out = new Int32Array(count);
         for (let i = 0; i < count; i++, t += 1 / FS) {
-          while (t + 0.2 >= nextBeat) { beats.push(nextBeat); nextBeat += nextRR(); }
-          beats = beats.filter(b => t - b < 0.8);
+          while (t + 0.2 >= nextBeat) { beats.push({ t: nextBeat, ty: opts.beatType ? opts.beatType(bi) : 'normal' }); bi++; nextBeat += nextRR(); }
+          beats = beats.filter(b => t - b.t < 0.8);
           let v = 200 * Math.sin(2 * Math.PI * 0.2 * t) + noise * gauss();
-          for (const b of beats) v += tpl(t - b);
+          for (const b of beats) v += tplOf(b.ty)(t - b.t);
           out[i] = Math.round(v);
         }
         return out;
@@ -469,8 +547,12 @@
         conclusion: 'No concluyente: señal insuficiente o muy pocos latidos válidos.' });
     }
     const fl = an.beats.filter(b => b.flag);
-    const marcados = !fl.length ? '0' : fl.length > 3 ? String(fl.length) :
-      fl.length + ' (' + fl.map(b => b.flag + ' a ' + mmss(b.t)).join(', ') + ')';
+    const cls = b => b.ectopic ? ' · ' + (b.ectopic === 'indeterminado' ? 'indet.' : b.ectopic) : '';
+    const ec = an.ectopics;
+    const nCorto = fl.filter(b => b.flag === 'corto').length, nLargo = fl.length - nCorto;
+    const marcados = !fl.length ? '0' : fl.length > 3
+      ? (ec && ec.applicable ? `${nCorto} prematuro${nCorto === 1 ? '' : 's'} (PVC ${ec.pvc}, PAC ${ec.pac}, indet. ${ec.indet})` + (nLargo ? ` · ${nLargo} intervalo${nLargo === 1 ? '' : 's'} largo${nLargo === 1 ? '' : 's'}` : '') : String(fl.length))
+      : fl.length + ' (' + fl.map(b => b.flag + ' a ' + mmss(b.t) + cls(b)).join(', ') + ')';
     const vfcVal = m.flagged > 0 && m.nnValid ? m.rmssdNN : m.rmssd;
     const out = Object.assign(base, { fc: Math.round(m.meanHR), marcados, vfc: vfcVal === null ? null : Math.round(vfcVal), vfcSinMarcados: m.flagged > 0 && m.nnValid });
     const pRaro = pw.level === 'incoherentes', pOk = pw.level === 'coherentes';
@@ -484,10 +566,11 @@
       return Object.assign(out, { estado: 'rojo', ritmo, conclusion: 'Se detectaron hallazgos que requieren revisión del trazado: ' + lcfirst(ritmo) + '.' });
     }
     if (fl.length > 0 || ir.level === 'intermedia' || pRaro) {
-      const ritmo = fl.length > 0 && ir.level === 'baja' && pOk ? 'Normal, con latidos marcados' :
+      const tipos = ec && ec.applicable && ec.templateOk && !ec.indet ? (ec.pvc && ec.pac ? 'PVC y PAC' : ec.pvc ? 'PVC' : ec.pac ? 'PAC' : null) : null;
+      const ritmo = fl.length > 0 && ir.level === 'baja' && pOk ? (tipos ? 'Normal, con ' + tipos : 'Normal, con latidos marcados') :
         pRaro ? 'Regular, sin ondas P claras' : 'Irregularidad intermedia';
       return Object.assign(out, { estado: 'amarillo', ritmo, conclusion: 'Se detectaron hallazgos que requieren revisión del trazado: ' +
-        (fl.length ? fl.length + ' latido' + (fl.length === 1 ? '' : 's') + ' marcado' + (fl.length === 1 ? '' : 's') + ' (' + fl.slice(0, 3).map(b => b.flag + ' a ' + mmss(b.t)).join(', ') + ')' : lcfirst(ritmo)) + '.' });
+        (fl.length ? fl.length + ' latido' + (fl.length === 1 ? '' : 's') + ' marcado' + (fl.length === 1 ? '' : 's') + ' (' + fl.slice(0, 3).map(b => b.flag + ' a ' + mmss(b.t) + cls(b)).join(', ') + ')' : lcfirst(ritmo)) + '.' });
     }
     if (ir.level === 'baja' && pOk) {
       return Object.assign(out, { estado: 'verde', ritmo: 'Normal', conclusion: 'Ritmo normal, sin latidos marcados y con buena calidad de señal.' });

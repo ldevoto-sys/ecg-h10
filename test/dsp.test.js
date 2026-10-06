@@ -164,6 +164,51 @@ test('resumen: estados verde / amarillo / rojo / gris', () => {
   assert.strictEqual(plana.estado, 'gris');
 });
 
+test('prematuros: QRS distinto = PVC, QRS igual con otra P = PAC; AF no se clasifica', () => {
+  const base = k => 0.81 + 0.008 * Math.sin(k * 1.7);
+  const mk = types => {
+    const early = new Set(Object.keys(types).map(Number));
+    const rrSeq = k => early.has(k + 1) ? 0.55 : early.has(k) ? 1.07 : base(k);
+    const a = DSP.analyze(gen(75, { rrSeq, beatType: k => types[k] || 'normal', seed: 4, noise: 10 }), DSP.FS, []);
+    return a;
+  };
+  const pvc = mk({ 20: 'pvc' });
+  assert.strictEqual(pvc.ectopics.pvc, 1, JSON.stringify(pvc.ectopics)); assert.strictEqual(pvc.ectopics.pac, 0);
+  const bp = pvc.beats.find(b => b.ectopic); assert.ok(bp.corr < 0.65, 'corr PVC ' + bp.corr);
+  const pac = mk({ 20: 'pac' });
+  assert.strictEqual(pac.ectopics.pac, 1, JSON.stringify(pac.ectopics)); assert.strictEqual(pac.ectopics.pvc, 0);
+  const bq = pac.beats.find(b => b.ectopic); assert.ok(bq.corr >= 0.80, 'corr PAC ' + bq.corr);
+  const mix = mk({ 20: 'pvc', 45: 'pac' });
+  assert.ok(mix.ectopics.pvc === 1 && mix.ectopics.pac === 1, JSON.stringify(mix.ectopics));
+  const rm = DSP.resumen(mix); assert.strictEqual(rm.ritmo, 'Normal, con PVC y PAC'); assert.ok(rm.marcados.startsWith('2 prematuros (PVC 1, PAC 1'), rm.marcados);
+  const r = DSP.resumen(pvc);
+  assert.strictEqual(r.estado, 'amarillo'); assert.strictEqual(r.ritmo, 'Normal, con PVC'); assert.ok(r.marcados.includes('PVC'), r.marcados);
+  assert.strictEqual(DSP.resumen(pac).ritmo, 'Normal, con PAC');
+  const none = DSP.analyze(gen(60, { hr: 75, seed: 3 }), DSP.FS, []);
+  assert.strictEqual(none.ectopics.applicable, false);
+  const af = DSP.analyze(gen(60, { irregular: true, seed: 5 }), DSP.FS, []);
+  assert.strictEqual(af.ectopics.applicable, false);
+});
+
+test('prematuros: con mucho ruido no se declara PVC/PAC de forma errónea', () => {
+  const base = k => 0.81 + 0.008 * Math.sin(k * 1.7);
+  const rrSeq = k => k === 19 ? 0.55 : k === 20 ? 1.07 : base(k);
+  const a = DSP.analyze(gen(75, { rrSeq, beatType: k => k === 20 ? 'pac' : 'normal', seed: 4, noise: 90 }), DSP.FS, []);
+  const b = a.beats.find(x => x.ectopic);
+  assert.ok(!b || b.ectopic !== 'PVC' || DSP.resumen(a).estado === 'gris', 'PAC con ruido 90 µV clasificado como PVC sin aviso');
+});
+
+test('prematuros: misma forma pero amplitud muy distinta = PVC; amplitud intermedia = indeterminado', () => {
+  const base = k => 0.81 + 0.008 * Math.sin(k * 1.7);
+  const run = ty => {
+    const rrSeq = k => k === 19 ? 0.55 : k === 20 ? 1.07 : base(k);
+    return DSP.analyze(gen(75, { rrSeq, beatType: k => k === 20 ? ty : 'normal', seed: 4, noise: 10 }), DSP.FS, []).beats.find(b => b.flag === 'corto');
+  };
+  assert.strictEqual(run('x0.45').ectopic, 'PVC'); assert.strictEqual(run('x0.78').ectopic, 'indeterminado');
+  assert.strictEqual(run('x1.0').ectopic, 'PAC'); assert.strictEqual(run('x1.1').ectopic, 'PAC');
+  assert.ok(Math.abs(run('x0.45').ampRatio - 0.45) < 0.1, 'ratio ' + run('x0.45').ampRatio);
+});
+
 test('filtro causal en vivo elimina la línea base lenta', () => {
   const f = DSP.createLiveFilter(DSP.FS, 50);
   let last = 0;

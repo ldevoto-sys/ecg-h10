@@ -131,7 +131,7 @@
     <table id="winTable"><thead><tr><th>Hora</th><th>FC</th><th>CV</th><th>ΔRR&gt;50 ms</th></tr></thead><tbody></tbody></table>
     <h2>Latidos marcados corto/largo</h2>
     <p class="muted" id="flagInfo"></p>
-    <table id="flagTable"><thead><tr><th>Hora</th><th>RR</th><th>Tipo</th></tr></thead><tbody></tbody></table>
+    <table id="flagTable"><thead><tr><th>Hora</th><th>RR</th><th>Tipo</th><th>Clase</th><th>Corr. · amp.</th></tr></thead><tbody></tbody></table>
     <h2 class="noprint">Exportar</h2>
     <div class="row">
       <button class="b alt" id="xRaw">CSV señal</button>
@@ -531,7 +531,7 @@ function renderSummary() {
     m.hr1minMax ? card(num(m.hr1minMax.hr) + ' / ' + num(m.hr1minMin.hr), 'FC media 1 min: más alta / más baja') : '',
     card(num(m.pctTachy, 1) + '% / ' + num(m.pctBrady, 1) + '%', 'Latidos >150 / <50 lpm'),
     m.flagged > 0 && m.nnValid ? card(num(m.sdnnNN), 'SDNN sin latidos marcados (ms)') + card(num(m.pnn50NN, 1) + '%', 'pNN50 sin latidos marcados') : card(num(m.sdnn), 'SDNN (ms)') + card(num(m.pnn50, 1) + '%', 'pNN50'),
-    card(m.flagged + ' (' + num(m.flaggedPct, 1) + '%)', 'Latidos corto/largo'), card(m.beats, 'Latidos válidos')
+    card(m.flagged + ' (' + num(m.flaggedPct, 1) + '%)', 'Latidos corto/largo' + (an.ectopics && an.ectopics.applicable && an.ectopics.templateOk ? ` · PVC ${an.ectopics.pvc} · PAC ${an.ectopics.pac} · indet. ${an.ectopics.indet}` : '')), card(m.beats, 'Latidos válidos')
   ].join('') : card('--', 'Sin latidos válidos suficientes');
   $('aCards').querySelectorAll('[data-i]').forEach(c => c.onclick = () => jumpTo(+c.dataset.i));
   $('aQuality').textContent = 'Señal utilizable: ' + num(an.validPct, 0) + '% · Huecos de conexión: ' + A.data.gaps.filter(g => g.ms > 0).length +
@@ -539,6 +539,7 @@ function renderSummary() {
   renderResumen();
 }
 
+const CLS_COLOR = { PVC: '#C62828', PAC: '#F2A900', indeterminado: '#7B1FA2' };
 const ESTADO = { verde: ['●', 'NORMAL'], amarillo: ['▲', 'REVISAR'], rojo: ['■', 'IRREGULAR'], gris: ['○', 'SIN DATOS'] };
 function renderResumen() {
   const r = DSP.resumen(A.an);
@@ -612,11 +613,11 @@ function renderTables() {
     tr.onclick = () => jumpTo(w.i0); wt.appendChild(tr);
   });
   const fl = an.beats.filter(b => b.flag);
-  $('flagInfo').textContent = fl.length ? `${fl.length} latido${fl.length === 1 ? '' : 's'} con RR >20 % distinto de la mediana de sus vecinos. Primeros 100 (toca para ver el trazado).` : 'Ninguno.';
+  $('flagInfo').textContent = fl.length ? `${fl.length} latido${fl.length === 1 ? '' : 's'} con RR >20 % distinto de la mediana de sus vecinos. Primeros 100 (toca para ver el trazado).` + (an.ectopics && an.ectopics.applicable ? ` Clase de los prematuros (experimental): PVC si el QRS difiere de los latidos normales en forma (correlación) o amplitud; PAC si es similar. No evalúa la onda P de ese latido.` + (an.ectopics.templateOk ? '' : ' No hay una plantilla de latidos normales confiable: sin clasificar.') : '') : 'Ninguno.';
   const ft = $('flagTable').querySelector('tbody'); ft.innerHTML = '';
   fl.slice(0, 100).forEach(b => {
     const tr = document.createElement('tr'); tr.className = 'click';
-    tr.innerHTML = `<td>${fmtT(b.t)}</td><td>${num(b.rr)} ms</td><td>${b.flag}</td>`;
+    tr.innerHTML = `<td>${fmtT(b.t)}</td><td>${num(b.rr)} ms</td><td>${b.flag}</td><td style="font-weight:700;color:${b.ectopic ? CLS_COLOR[b.ectopic] : 'inherit'}">${b.ectopic ? (b.ectopic === 'indeterminado' ? 'indet.' : b.ectopic) : '--'}</td><td>${b.ectopic ? num(b.corr, 2) + ' · ' + num(b.ampRatio, 2) : '--'}</td>`;
     tr.onclick = () => jumpTo(b.i); ft.appendChild(tr);
   });
 }
@@ -639,7 +640,7 @@ $('aPeaks').onchange = drawTrace;
 function drawTrace() {
   if (!A.an) return;
   const i0 = drawTraceOn($('trace'), A.view.i0, viewLen());
-  $('aPosInfo').textContent = `Desde ${fmtT(A.an.timeOf(i0))} · pico R: círculo; marcado corto/largo: círculo oscuro con anillo; sombreado gris: señal descartada por calidad; número inferior: RR en ms.`;
+  $('aPosInfo').textContent = `Desde ${fmtT(A.an.timeOf(i0))} · pico R: círculo; latido prematuro: rojo = PVC, ámbar = PAC, morado = clase indeterminada; corto/largo sin clase: círculo oscuro con anillo; sombreado gris: señal descartada por calidad; número inferior: RR en ms.`;
 }
 
 // Dibuja la señal filtrada con picos R, huecos y síntomas. Devuelve el índice inicial usado.
@@ -668,8 +669,10 @@ function drawTraceOn(cv, i0req, Lreq) {
   if (cv.id !== 'trace' || $('aPeaks').checked) for (const b of an.beats) {
     if (b.i < i0 || b.i >= i1) continue;
     const x = (b.i - i0) * xs, y = (hi - an.ecg[b.i]) * ys;
-    g.beginPath(); g.arc(x, Math.max(6, y - 8), 4, 0, 7); g.fillStyle = b.flag ? C.navy : C.cyan; g.fill();
-    if (b.flag) { g.strokeStyle = C.cyan; g.lineWidth = 2; g.stroke(); g.fillStyle = C.navy; g.fillText(b.flag, x + 7, Math.max(16, y - 4)); }
+    const cc = b.ectopic ? CLS_COLOR[b.ectopic] : null;
+    g.beginPath(); g.arc(x, Math.max(6, y - 8), b.ectopic ? 5.5 : 4, 0, 7); g.fillStyle = cc || (b.flag ? C.navy : C.cyan); g.fill();
+    if (b.flag) { g.strokeStyle = cc || C.cyan; g.lineWidth = 2; g.stroke(); g.fillStyle = cc || C.navy; g.font = 'bold 12px system-ui';
+      g.fillText(b.ectopic ? (b.ectopic === 'indeterminado' ? '?' : b.ectopic) : b.flag, x + 8, Math.max(16, y - 4)); g.font = '12px system-ui'; }
     if (b.rr) { g.fillStyle = C.gray; g.fillText(Math.round(b.rr), x - 12, h - 6); }
   }
   return i0;
@@ -721,7 +724,7 @@ $('xBeats').onclick = () => {
 };
 $('xJson').onclick = () => download(base() + '_resumen.json', JSON.stringify({
   inicio: new Date(A.meta.startedAt).toISOString(), duracion_s: A.meta.durationS, simulada: A.meta.simulated, fs: FS,
-  resumen: A.resumen, metricas: A.an.metrics, irregularidad: A.an.irregularity, ondas_p: A.an.pwave && { ...A.an.pwave, template: undefined }, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
+  resumen: A.resumen, ectopicos: A.an.ectopics && { ...A.an.ectopics, latidos: A.an.beats.filter(b => b.ectopic).map(b => ({ t_s: b.t, rr_ms: b.rr, clase: b.ectopic, corr: b.corr, razon_amplitud: b.ampRatio })) }, metricas: A.an.metrics, irregularidad: A.an.irregularity, ondas_p: A.an.pwave && { ...A.an.pwave, template: undefined }, senal_utilizable_pct: A.an.validPct, huecos: A.data.gaps,
   sintomas: A.data.events.map(e => ({ hora: new Date(e.wall).toISOString(), t_s: evTime(e), ...windowStats(evTime(e), 10) })),
   ventanas_mas_irregulares: [...A.an.windows].sort((a, b) => b.cv - a.cv).slice(0, 5),
   umbrales: DSP.CFG, nota: 'Heurísticos no calibrados. Sin fines médicos.'

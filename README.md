@@ -37,6 +37,18 @@ Sensibilidad al ruido (sintético con P de 120 µV): coherencia 0,96 con ruido d
 
 Limitaciones: la ausencia de P no se puede medir con ritmo rápido (pocos latidos con RR ≥500 ms), un flutter también tiene ondas regulares, y los latidos prematuros repetidos bajan la coherencia (por eso se combina con el patrón de los RR). Las señales de referencia no se incluyen en el repo (datos personales).
 
+## Latidos prematuros: PVC / PAC (experimental)
+Solo para latidos marcados "corto" (intervalo previo >20 % menor que la mediana de sus vecinos), y solo si hay una plantilla confiable de latidos normales (≥8 latidos, correlación interna ≥0,85) y los marcados son ≤30 % de los latidos.
+- Se compara el QRS (±100 ms alrededor de la R, con desfase de hasta ±2 muestras) con la plantilla de latidos normales: **correlación** y **razón de amplitud** pico a pico.
+- **PVC**: correlación <0,65, o amplitud <0,70 o >1,45 veces la normal. **PAC**: correlación ≥0,80 y amplitud entre 0,85 y 1,20. En medio: **indeterminado** (se muestra "?").
+- En el trazado: rojo = PVC, ámbar = PAC, morado = indeterminado. La tabla de latidos marcados muestra la correlación y la razón de amplitud de cada uno.
+
+Qué significa realmente: "PVC" = el QRS difiere de los latidos normales en forma o amplitud; "PAC" = el QRS es similar. **No** se evalúa la onda P propia de ese latido ni el ancho del QRS (a 130 Hz el ancho medido por un método simple varía entre ~40 y ~200 ms en latidos normales, por lo que no se usa como criterio). Un latido de la unión, o un ventricular con QRS parecido, saldría como PAC.
+
+Validación: solo con señales sintéticas (la mecánica funciona hasta ~130 µV de ruido) y con una señal real digitalizada de 30 s de otro dispositivo con latidos prematuros, donde los latidos adelantados son espigas angostas de 45–80 % de la amplitud normal (3 PVC, 2 indeterminados). No hay validación con la H10 ni con latidos prematuros confirmados por un médico. Los umbrales son provisionales.
+
+Además se bajó el umbral del detector de picos R de 0,35 a 0,12 de la energía local (equivale a ~35 % de amplitud en vez de ~59 %), para no perder prematuros pequeños. No cambió el resultado con las 2 señales de FA.
+
 ## Pruebas
 - `node test/dsp.test.js`: procesamiento (picos R, FC, latido prematuro, huecos, calidad, ruido).
 - `NODE_PATH=$(npm root -g) node test/e2e.js`: Chromium real con banda simulada (protocolo PMD, reconexión, análisis, exportación).
